@@ -1,7 +1,7 @@
 //! A generic Tokio TCP client implementation.
 
 use tcp::TcpStream;
-use reactor::{self, ReactorHandle, Task, NewTask};
+use reactor::{self, ReactorHandle, NewTask};
 use std::net::SocketAddr;
 
 /// Connect to the given `addr` then handle the `TcpStream` on the task created
