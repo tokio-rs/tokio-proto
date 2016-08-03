@@ -22,7 +22,7 @@ exclude       = [
 ]
 
 [dependencies]
-log = "*"
+log = "0.3.6"
 mio = { git = "https://github.com/carllerche/mio", branch = "dev" }
 slab = { git = "https://github.com/carllerche/slab" }
 futures = "0.1.0"
