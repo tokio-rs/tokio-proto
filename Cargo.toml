@@ -1,0 +1,36 @@
+[package]
+
+name          = "tokio"
+version       = "0.1.0"
+license       = "MIT/Apache-2.0"
+authors       = ["Carl Lerche <me@carllerche.com>"]
+description   = """
+A network application framework for rapid development and highly scalable
+production deployments of clients and servers.
+"""
+
+documentation = "http://rust-doc.s3-website-us-east-1.amazonaws.com/tokio/master/tokio"
+homepage      = "https://github.com/tokio-rs/tokio"
+repository    = "https://github.com/tokio-rs/tokio"
+readme        = "README.md"
+keywords      = [ "io", "async", "non-blocking", "futures" ]
+exclude       = [
+  ".gitignore",
+  ".travis.yml",
+  "deploy.sh",
+  "test/**/*",
+]
+
+[dependencies]
+log = "*"
+mio = { git = "https://github.com/carllerche/mio", branch = "dev" }
+slab = { git = "https://github.com/carllerche/slab" }
+futures = "0.1.0"
+scoped-tls = "0.1.0"
+
+[dev-dependencies]
+env_logger = "0.3.0"
+
+[[test]]
+name = "test"
+path = "test/mod.rs"
