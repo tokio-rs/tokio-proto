@@ -118,18 +118,18 @@ impl<T, E> Complete<T, E>
 {
     /// Successfully complete the associated `Val` with the given value.
     pub fn complete(self, val: T) {
-        self.inner.complete(Some(Ok(val)), false);
+        self.inner.complete(Some(Ok(val)), true);
     }
 
     /// Complete the associated `Val` with the given error
     pub fn error(self, err: E) {
-        self.inner.complete(Some(Err(err)), false);
+        self.inner.complete(Some(Err(err)), true);
     }
 
     /// Abort the computation. This will cause the associated `Val` to panic on
     /// a call to `poll`.
     pub fn abort(self) {
-        self.inner.complete(None, false);
+        self.inner.complete(None, true);
     }
 
     /// Returns a `Future` representing the consuming end cancelling interest
@@ -152,7 +152,7 @@ impl<T, E> Complete<T, E>
 
 impl<T, E> Drop for Complete<T, E> {
     fn drop(&mut self) {
-        self.inner.complete(None, true);
+        self.inner.complete(None, false);
     }
 }
 
@@ -387,20 +387,15 @@ mod test {
     }
 
     #[test]
+    #[should_panic(expected = "Complete dropped without producing a value")]
     fn test_polling_aborted_future_panics() {
-        use std::thread;
+        let (c, val) = pair::<u32, ()>();
+        val.then(move |res| {
+            println!("WAT: {:?}", res);
+            res
+        }).forget();
 
-        let res = thread::spawn(|| {
-            let (c, val) = pair::<u32, ()>();
-            val.then(move |res| {
-                println!("WAT: {:?}", res);
-                res
-            }).forget();
-
-            c.abort();
-        });
-
-        assert!(res.join().is_err());
+        c.abort();
     }
 
     #[test]
