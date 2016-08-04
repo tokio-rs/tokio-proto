@@ -1,4 +1,5 @@
 use tcp::TcpStream;
+use take::Take;
 use std::io;
 
 /// A non-blocking unit of work scheduled to run on a `Reactor`.
@@ -57,6 +58,19 @@ impl<F, T> Task for F
     }
 }
 
+impl<F, T> Task for Take<F>
+    where F: FnOnce() -> T,
+          T: IntoTick,
+{
+    fn tick(&mut self) -> io::Result<Tick> {
+        self.take()().into_tick()
+    }
+
+    fn oneshot(&self) -> bool {
+        true
+    }
+}
+
 /// A conversion into `Tick`
 pub trait IntoTick {
     /// Convert the value into an `io::Result<Tick>`
@@ -104,5 +118,16 @@ impl<T, U> NewTask for T
 
     fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item> {
         self(stream)
+    }
+}
+
+impl<T, U> NewTask for Take<T>
+    where T: FnOnce(TcpStream) -> io::Result<U> + Send + 'static,
+          U: Task,
+{
+    type Item = U;
+
+    fn new_task(&self, stream: TcpStream) -> io::Result<U> {
+        self.take()(stream)
     }
 }

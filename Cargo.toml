@@ -27,6 +27,7 @@ mio = { git = "https://github.com/carllerche/mio", branch = "dev" }
 slab = { git = "https://github.com/carllerche/slab" }
 futures = "0.1.0"
 scoped-tls = "0.1.0"
+take = "0.1.0"
 
 [dev-dependencies]
 env_logger = "0.3.0"

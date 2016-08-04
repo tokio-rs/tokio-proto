@@ -30,6 +30,7 @@
 extern crate mio;
 extern crate slab;
 extern crate futures;
+extern crate take;
 
 #[macro_use]
 extern crate scoped_tls;
@@ -46,6 +47,5 @@ pub mod tcp;
 pub mod util;
 
 mod service;
-mod take;
 
 pub use self::service::{Service, NewService, SimpleService, simple_service};
