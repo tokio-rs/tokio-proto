@@ -100,6 +100,8 @@ pub use self::reactor::{
     Config,
     Reactor,
     ReactorHandle,
+    Error,
+    Result,
     schedule,
     oneshot,
     register_source,

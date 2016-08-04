@@ -53,15 +53,6 @@ pub enum Error<E> {
     Io(io::Error),
 }
 
-impl From<Error<io::Error>> for io::Error {
-    fn from(err: Error<io::Error>) -> Self {
-        match err {
-            Error::Transport(e) => e,
-            Error::Io(e) => e,
-        }
-    }
-}
-
 /// A specialization of `io::Transport` supporting the requirements of
 /// pipeline based protocols.
 ///
@@ -141,5 +132,14 @@ impl<F, T> NewTransport for F
 
     fn new_transport(&self, socket: TcpStream) -> io::Result<T> {
         self(socket)
+    }
+}
+
+impl From<Error<io::Error>> for io::Error {
+    fn from(err: Error<io::Error>) -> Self {
+        match err {
+            Error::Transport(e) => e,
+            Error::Io(e) => e,
+        }
     }
 }

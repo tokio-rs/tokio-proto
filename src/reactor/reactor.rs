@@ -6,7 +6,7 @@ use reactor::source::{self, Source};
 use mio::{Evented, Events, EventSet, Poll, PollOpt, Token};
 use mio::channel::{self, Sender, Receiver};
 use slab::Slab;
-use std::{io, usize};
+use std::{io, thread, usize};
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::sync::atomic::{AtomicUsize, ATOMIC_USIZE_INIT, Ordering};
 
@@ -23,6 +23,17 @@ pub struct Reactor {
     tx: Sender<Op>,
     rx: Receiver<Op>,
     config: Config,
+}
+
+/// A specialized `Result` for Reactor operations.
+pub type Result<T> = ::std::result::Result<T, Error>;
+
+/// Error type for reactor operations.
+pub enum Error {
+    /// Function called while off the reactor thread
+    OffThread,
+    /// I/O error
+    Io(io::Error),
 }
 
 pub struct EventLoop {
@@ -198,7 +209,10 @@ impl ReactorHandle {
 
     /// Shutdown the reactor
     pub fn shutdown(&self) {
-        self.oneshot(|| shutdown());
+        self.oneshot(|| {
+            try!(shutdown());
+            Ok(())
+        });
     }
 }
 
@@ -213,8 +227,8 @@ impl ReactorHandle {
 /// # Panics
 ///
 /// If not currently on a reactor thread, this function panics.
-pub fn schedule<T: Task + 'static>(task: T) {
-    CURRENT_RT.with(|rt| rt.staged_tasks.push(Box::new(task)))
+pub fn schedule<T: Task + 'static>(task: T) -> Result<()> {
+    with_current_rt(|rt| Ok(rt.staged_tasks.push(Box::new(task))))
 }
 
 /// Run the given function on the reactor.
@@ -222,7 +236,7 @@ pub fn schedule<T: Task + 'static>(task: T) {
 /// # Panics
 ///
 /// If not currently on a reactor thread, this function panics.
-pub fn oneshot<F: FnOnce() -> T + Send + 'static, T: IntoTick>(f: F) {
+pub fn oneshot<F: FnOnce() -> T + Send + 'static, T: IntoTick>(f: F) -> Result<()> {
     use take::Take;
     schedule(Take::new(f))
 }
@@ -233,8 +247,8 @@ pub fn oneshot<F: FnOnce() -> T + Send + 'static, T: IntoTick>(f: F) {
 /// # Panics
 ///
 /// If not currently on a reactor thread, this function panics.
-pub fn register_source<E: Evented>(evented: &E, interest: Ready) -> io::Result<Source> {
-    CURRENT_RT.with(|rt| {
+pub fn register_source<E: Evented>(evented: &E, interest: Ready) -> Result<Source> {
+    with_current_rt(|rt| {
         // Create the new source
         let source = {
                 let mut sources = rt.sources.borrow_mut();
@@ -257,12 +271,25 @@ pub fn register_source<E: Evented>(evented: &E, interest: Ready) -> io::Result<S
 /// # Panics
 ///
 /// If not currently on a reactor thread, this function panics.
-pub fn shutdown() {
-    CURRENT_RT.with(|rt| rt.shutdown());
+pub fn shutdown() -> Result<()> {
+    with_current_rt(|rt| Ok(rt.shutdown()))
+}
+
+fn with_current_rt<F: FnOnce(&Rt) -> Result<R>, R>(f: F) -> Result<R> {
+    if !CURRENT_RT.is_set() {
+        return Err(Error::OffThread);
+    }
+
+    CURRENT_RT.with(f)
 }
 
 impl EventLoop {
     pub fn current_task(event_loop_id: EventLoopId) -> Option<TaskRef> {
+        // Prevent double panic
+        if !CURRENT_RT.is_set() && thread::panicking() {
+            return None;
+        }
+
         CURRENT_RT.with(|rt| {
             if rt.id != event_loop_id {
                 None
@@ -273,10 +300,20 @@ impl EventLoop {
     }
 
     pub fn current_task_did_advance() {
+        // Prevent double panic
+        if !CURRENT_RT.is_set() && thread::panicking() {
+            return;
+        }
+
         CURRENT_RT.with(|rt| rt.current_task_did_advance.set(true))
     }
 
     pub fn drop_source(token: Token) {
+        // Prevent double panic
+        if !CURRENT_RT.is_set() && thread::panicking() {
+            return;
+        }
+
         CURRENT_RT.with(|rt| rt.sources.borrow_mut().remove(token));
     }
 
@@ -540,6 +577,21 @@ impl TaskRef {
 
     pub fn tick_num(&self) -> u64 {
         self.tick_num
+    }
+}
+
+impl From<Error> for io::Error {
+    fn from(src: Error) -> io::Error {
+        match src {
+            Error::OffThread => io::Error::new(io::ErrorKind::Other, "operation invoked off the reactor thread"),
+            Error::Io(e) => e,
+        }
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(src: io::Error) -> Error {
+        Error::Io(src)
     }
 }
 

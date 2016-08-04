@@ -64,6 +64,7 @@ pub fn connect<T>(reactor: &ReactorHandle, addr: SocketAddr, new_task: T)
             Err(_) => unimplemented!(),
         };
 
-        reactor::schedule(task);
+        try!(reactor::schedule(task));
+        Ok(())
     });
 }

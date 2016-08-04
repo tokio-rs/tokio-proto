@@ -86,7 +86,8 @@ pub fn listen<T>(reactor: &ReactorHandle, addr: SocketAddr, new_task: T) -> io::
         let listener = Listener::new(socket, new_task);
 
         // Register the listener with the Reactor
-        reactor::schedule(listener);
+        try!(reactor::schedule(listener));
+        Ok(())
     });
 
     Ok(ServerHandle {
@@ -119,7 +120,7 @@ impl<T: NewTask> Task for Listener<T> {
             let socket = try!(TcpStream::watch(socket));
             let task = try!(self.new_task.new_task(socket));
 
-            reactor::schedule(task);
+            try!(reactor::schedule(task));
         }
 
         Ok(Tick::WouldBlock)
