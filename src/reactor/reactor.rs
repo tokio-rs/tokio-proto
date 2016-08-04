@@ -379,15 +379,16 @@ impl EventLoop {
 
     fn process_op(&mut self, op: Op) -> io::Result<()> {
         match op {
-            Op::Schedule(mut f) => {
-                if f.oneshot() {
-                    match self.rt.scope(None, || f.tick()) {
+            Op::Schedule(mut task) => {
+                if task.oneshot() {
+                    match self.rt.scope(None, || task.tick()) {
                         Ok(Tick::Final) => {} // Expected return value
                         Ok(Tick::WouldBlock) => warn!("oneshot `Task` returned `Tick::WouldBlock`"),
                         Ok(Tick::Yield) => warn!("oneshot `Task` returned `Tick::Yield`"),
                         Err(e) => warn!("oneshot `Task` returned error; err={:?}", e),
                     }
                 } else {
+                    self.add_task(task);
                 }
             }
         }
@@ -491,7 +492,10 @@ impl EventLoop {
                         trace!("current task made progress");
                     }
                     Err(_) => {
-                        unimplemented!();
+                        // Task returned an error, in this case it has to be
+                        // cleaned up
+                        task_shutdown = true;
+                        break;
                     }
                 }
             }

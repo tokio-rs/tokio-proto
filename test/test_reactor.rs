@@ -1,6 +1,7 @@
 use tokio::io::Ready;
-use tokio::reactor::{self, Config, Reactor};
+use tokio::reactor::{self, Config, Reactor, Task, Tick};
 use std::io;
+use std::sync::mpsc::{self, Sender};
 
 #[test]
 fn test_internal_source_state_is_cleaned_up() {
@@ -43,4 +44,36 @@ fn test_internal_source_state_is_cleaned_up() {
     });
 
     assert!(reactor.run().is_ok());
+}
+
+#[test]
+fn test_returning_error_from_task_terminates() {
+    struct MyTask {
+        tx: Sender<()>,
+    }
+
+    impl Task for MyTask {
+        fn tick(&mut self) -> io::Result<Tick> {
+            Err(io::Error::new(io::ErrorKind::Other, "boom"))
+        }
+    }
+
+    impl Drop for MyTask {
+        fn drop(&mut self) {
+            let _ = self.tx.send(());
+        }
+    }
+
+    let reactor = Reactor::default().unwrap();
+    let handle = reactor.handle();
+    reactor.spawn();
+
+    let (tx, rx) = mpsc::channel();
+
+    handle.schedule(MyTask { tx: tx });
+
+    // Receive the cleanup notice
+    rx.recv().unwrap();
+
+    handle.shutdown();
 }
