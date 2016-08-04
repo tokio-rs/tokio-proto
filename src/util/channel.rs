@@ -1,6 +1,6 @@
 //! A Tokio aware channel `Receiver` wrapping a `mio::Receiver`.
 
-use io::Ready;
+use io::{Ready, Readiness};
 use reactor::{self, Source};
 use mio::channel as mio;
 use std::io;
@@ -48,5 +48,15 @@ impl<T> Receiver<T> {
                 Err(RecvError)
             }
         }
+    }
+}
+
+impl<T> Readiness for Receiver<T> {
+    fn is_readable(&self) -> bool {
+        self.source.is_readable()
+    }
+
+    fn is_writable(&self) -> bool {
+        self.source.is_writable()
     }
 }
