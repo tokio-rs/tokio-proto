@@ -551,6 +551,14 @@ impl EventLoop {
     }
 }
 
+impl Drop for EventLoop {
+    fn drop(&mut self) {
+        // TODO: Is there a better way to cleanup the resources?
+        let tasks = &mut self.tasks;
+        self.rt.scope(None, || tasks.clear());
+    }
+}
+
 impl Rt {
     fn run(&self) -> bool {
         self.run.get()

@@ -35,6 +35,7 @@ use tcp::TcpStream;
 use std::io;
 
 /// A pipelined protocol frame
+#[derive(Debug)]
 pub enum Frame<T, E> {
     /// Either a request or a response
     Message(T),
