@@ -32,10 +32,10 @@ pub use self::server::Server;
 
 use io::{Readiness};
 use tcp::TcpStream;
-use std::io;
+use std::{fmt, io};
 
 /// A pipelined protocol frame
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq, Clone)]
 pub enum Frame<T, E> {
     /// Either a request or a response
     Message(T),
@@ -97,6 +97,34 @@ pub trait NewTransport: Send + 'static {
 
     /// Create and return a new `Transport`
     fn new_transport(&self, socket: TcpStream) -> io::Result<Self::Item>;
+}
+
+impl<T, E> Frame<T, E> {
+    /// Unwraps a frame, yielding the content of the `Message`.
+    pub fn unwrap_msg(self) -> T where E: fmt::Debug {
+        match self {
+            Frame::Message(v) => v,
+            Frame::Error(e) => panic!("called `Frame::unwrap_msg()` on an `Error` value: {:?}", e),
+            Frame::Done => panic!("called `Frame::unwrap_msg()` on a `Done` value"),
+        }
+    }
+
+    /// Unwraps a frame, yielding the content of the `Error`.
+    pub fn unwrap_err(self) -> E where T: fmt::Debug {
+        match self {
+            Frame::Error(e) => e,
+            Frame::Message(v) => panic!("called `Frame::unwrap_err()` on a `Message` value: {:?}", v),
+            Frame::Done => panic!("called `Frame::unwrap_message()` on a `Done` value"),
+        }
+    }
+
+    /// Returns true if the frame is `Frame::Done`
+    pub fn is_done(&self) -> bool {
+        match *self {
+            Frame::Done => true,
+            _ => false,
+        }
+    }
 }
 
 impl<T, U, V, E> Transport for T

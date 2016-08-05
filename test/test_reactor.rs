@@ -40,7 +40,8 @@ fn test_internal_source_state_is_cleaned_up() {
             assert!(source.is_ok());
         }
 
-        reactor::shutdown();
+        try!(reactor::shutdown());
+        Ok(())
     });
 
     assert!(reactor.run().is_ok());
