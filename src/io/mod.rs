@@ -131,12 +131,8 @@ impl<T: io::Read> TryRead for T {
     fn try_read(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
         match self.read(buf) {
             Ok(n) => Ok(Some(n)),
-            Err(e) => {
-                if e.kind() == io::ErrorKind::WouldBlock {
-                    return Ok(None);
-                }
-                Err(e)
-            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
         }
     }
 }
@@ -162,12 +158,8 @@ impl<T: io::Write> TryWrite for T {
     fn try_write(&mut self, buf: &[u8]) -> io::Result<Option<usize>> {
         match self.write(buf) {
             Ok(n) => Ok(Some(n)),
-            Err(e) => {
-                if e.kind() == io::ErrorKind::WouldBlock {
-                    return Ok(None);
-                }
-                Err(e)
-            }
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
         }
     }
 }
