@@ -29,6 +29,7 @@ pub struct Reactor {
 pub type Result<T> = ::std::result::Result<T, Error>;
 
 /// Error type for reactor operations.
+#[derive(Debug)]
 pub enum Error {
     /// Function called while off the reactor thread
     OffThread,
