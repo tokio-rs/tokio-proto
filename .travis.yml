@@ -10,5 +10,9 @@ os:
   - linux
   - osx
 
+matrix:
+    allow_failure:
+        - rust: nightly
+
 script:
   - cargo test
