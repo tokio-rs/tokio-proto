@@ -11,7 +11,7 @@ os:
   - osx
 
 matrix:
-    allow_failure:
+    allow_failures:
         - rust: nightly
 
 script:
