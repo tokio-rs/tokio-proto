@@ -46,6 +46,7 @@ enum WriteCap {
     Flush,
 }
 
+#[derive(Debug, Clone, Copy)]
 enum Write<T> {
     Write(T),
     Flush,
@@ -76,18 +77,29 @@ pub fn transport<In, Out>() -> (TransportHandle<In, Out>, NewTransport<In, Out>)
 }
 
 impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
+
+    /// Send a message to the transport.
+    ///
+    /// The transport will become readable and the next call to `::read()` will
+    /// return the given message.
     pub fn send(&self, v: Out) {
         self.inner.lock().unwrap().send(Ok(v));
     }
 
+    /// Send an error to the transport;
+    ///
+    /// The transport will become readable and the next call to `::read()` will
+    /// return the given error
     pub fn error(&self, e: io::Error) {
         self.inner.lock().unwrap().send(Err(e));
     }
 
+    /// Allow the transport to write a message.
     pub fn allow_write(&self) {
         self.inner.lock().unwrap().allow_write(WriteCap::Write);
     }
 
+    /// Receive a write from the transport
     pub fn next_write(&self) -> In {
         match self.rx.recv().unwrap() {
             Write::Write(v) => v,
@@ -96,6 +108,7 @@ impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
         }
     }
 
+    /// Allow the transport to attempt to flush a message
     pub fn allow_flush(&self) {
         self.inner.lock().unwrap().allow_write(WriteCap::Flush);
     }
@@ -106,6 +119,11 @@ impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
             Write::Write(v) => panic!("expected flush; actual={:?}", v),
             Write::Drop => panic!("expected flush; actual=Drop"),
         }
+    }
+
+    pub fn allow_and_assert_flush(&self) {
+        self.allow_flush();
+        self.assert_flush();
     }
 
     pub fn assert_drop(&self) {
@@ -119,6 +137,16 @@ impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
     pub fn allow_and_assert_drop(&self) {
         self.allow_write();
         self.assert_drop();
+    }
+
+    pub fn assert_no_write(&self, ms: u64) {
+        // Unfortunately, mpsc::channel() does not support timeouts on recv, so
+        // for now just sleep
+        super::sleep_ms(ms);
+
+        if let Ok(v) = self.rx.try_recv() {
+            panic!("expected no write; received={:?}", v);
+        }
     }
 }
 

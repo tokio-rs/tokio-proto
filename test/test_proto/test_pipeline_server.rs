@@ -78,9 +78,41 @@ fn test_delayed_writable_immediate_response_echo() {
 }
 
 #[test]
-#[ignore]
 fn test_pipelining_while_service_is_processing() {
-    // Transport receives more messages while service is processing
+    let (tx, rx) = channel();
+
+    let service = tokio::simple_service(move |_| {
+        let (c, fut) = future::pair();
+        tx.lock().unwrap().send(c).unwrap();
+        fut
+    });
+
+    run(service, |mock| {
+        // Allow all the writes
+        for _ in 0..3 { mock.allow_write() };
+
+        mock.send(Frame::Message("one"));
+        let c1 = rx.recv().unwrap();
+
+        mock.send(Frame::Message("two"));
+        let c2 = rx.recv().unwrap();
+
+        mock.send(Frame::Message("three"));
+        let c3 = rx.recv().unwrap();
+
+        mock.assert_no_write(20);
+        c3.complete("three");
+
+        mock.assert_no_write(20);
+        c2.complete("two");
+
+        mock.assert_no_write(20);
+        c1.complete("one");
+
+        assert_eq!("one", mock.next_write().unwrap_msg());
+        assert_eq!("two", mock.next_write().unwrap_msg());
+        assert_eq!("three", mock.next_write().unwrap_msg());
+    });
 }
 
 #[test]
@@ -93,9 +125,9 @@ fn test_pipelining_while_transport_not_writable() {
     });
 
     run(service, |mock| {
-        mock.send(pipeline::Frame::Message("one"));
-        mock.send(pipeline::Frame::Message("two"));
-        mock.send(pipeline::Frame::Message("three"));
+        mock.send(Frame::Message("one"));
+        mock.send(Frame::Message("two"));
+        mock.send(Frame::Message("three"));
 
         // Assert the service received all the requests before they are written
         // to the transport
@@ -115,10 +147,23 @@ fn test_pipelining_while_transport_not_writable() {
 }
 
 #[test]
-#[ignore]
-fn test_pipelining_retains_order_when_service_responds_out_of_order() {
-    // Complete the service futures in the opposite order than they are
-    // received
+fn test_repeatedly_flushes_messages() {
+    let service = tokio::simple_service(move |req| {
+        finished::<&'static str, io::Error>(req)
+    });
+
+    run(service, |mock| {
+        mock.send(Frame::Message("hello"));
+
+        mock.allow_and_assert_flush();
+        mock.allow_and_assert_flush();
+
+        mock.allow_write();
+        assert_eq!("hello", mock.next_write().unwrap_msg());
+
+        mock.send(Frame::Done);
+        mock.assert_drop();
+    });
 }
 
 fn channel<T>() -> (Mutex<mpsc::Sender<T>>, mpsc::Receiver<T>) {
