@@ -82,7 +82,13 @@ impl<S, T, E> Task for Server<S, T>
                             self.run = false;
                             break;
                         }
-                        _ => unimplemented!(),
+                        Frame::Error(_) => {
+                            // At this point, the transport is toast, there
+                            // isn't much else that we can do. Killing the task
+                            // will cause all in-flight requests to abort, but
+                            // they can't be written to the transport anyway...
+                            return Err(io::Error::new(io::ErrorKind::BrokenPipe, "An error occurred."));
+                        }
                     }
                 }
                 Ok(None) => break,
