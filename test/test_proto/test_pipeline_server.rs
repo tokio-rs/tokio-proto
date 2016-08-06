@@ -3,7 +3,7 @@ use tokio::{self, Service};
 use tokio::proto::pipeline::{self, Frame};
 use tokio::reactor::{self, Reactor};
 use tokio::util::future;
-use futures::{finished};
+use futures::{failed, finished};
 use std::io;
 use std::sync::{mpsc, Mutex};
 
@@ -164,6 +164,31 @@ fn test_repeatedly_flushes_messages() {
         mock.send(Frame::Done);
         mock.assert_drop();
     });
+}
+
+#[test]
+fn test_returning_error_from_service() {
+    let service = tokio::simple_service(move |req| {
+        failed::<&'static str, io::Error>(io::Error::new(io::ErrorKind::Other, "nope"))
+    });
+
+    run(service, |mock| {
+        mock.send(Frame::Message("hello"));
+
+        mock.allow_write();
+        assert_eq!(io::ErrorKind::Other, mock.next_write().unwrap_err().kind());
+
+        mock.assert_no_write(20);
+
+        mock.send(Frame::Done);
+        mock.assert_drop();
+    });
+}
+
+#[test]
+#[ignore]
+fn test_returning_would_block_from_service() {
+    // Because... it could happen
 }
 
 fn channel<T>() -> (Mutex<mpsc::Sender<T>>, mpsc::Receiver<T>) {

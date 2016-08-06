@@ -33,8 +33,8 @@ impl<S, T> Server<S, T>
 
 impl<S, T, E> Task for Server<S, T>
     where S: Service<Error = E>,
-          T: Transport<In=S::Resp, Out=S::Req>,
-          E: From<Error<T::Error>> + Send + 'static,
+          T: Transport<In=S::Resp, Out=S::Req, Error = E>,
+          E: From<Error<E>> + Send + 'static,
 {
     fn tick(&mut self) -> io::Result<Tick> {
         trace!("pipeline::Server::tick");
@@ -52,7 +52,10 @@ impl<S, T, E> Task for Server<S, T>
                     trace!("got in_flight value");
                     flush = try!(self.transport.write(Frame::Message(val)));
                 }
-                Some(Err(_)) => unimplemented!(),
+                Some(Err(e)) => {
+                    trace!("got in_flight error");
+                    flush = try!(self.transport.write(Frame::Error(e)));
+                },
                 None => {
                     trace!("no response ready for write");
                     break;
