@@ -92,7 +92,11 @@ impl<S, T, E> Task for Server<S, T>
                     }
                 }
                 Ok(None) => break,
-                Err(_) => unimplemented!(),
+                Err(e) => {
+                    // Return the error from the task. This will cause the
+                    // task to be cleaned up.
+                    return Err(e);
+                }
             }
         }
 

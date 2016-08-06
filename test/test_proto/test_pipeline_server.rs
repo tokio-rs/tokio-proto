@@ -186,13 +186,25 @@ fn test_returning_error_from_service() {
 }
 
 #[test]
-fn test_reading_error_from_transport() {
+fn test_reading_error_frame_from_transport() {
     let service = tokio::simple_service(move |_| {
         finished::<&'static str, io::Error>("omg no")
     });
 
     run(service, |mock| {
         mock.send(Frame::Error(io::Error::new(io::ErrorKind::Other, "mock transport error frame")));
+        mock.assert_drop();
+    });
+}
+
+#[test]
+fn test_reading_io_error_from_transport() {
+    let service = tokio::simple_service(move |_| {
+        finished::<&'static str, io::Error>("omg no")
+    });
+
+    run(service, |mock| {
+        mock.error(io::Error::new(io::ErrorKind::Other, "mock transport error frame"));
         mock.assert_drop();
     });
 }
