@@ -16,7 +16,7 @@
 //!
 //! In the case of `TcpStream`, the Tokio aware TCP socket, when
 //! `TcpStream::try_read` is called and `Ok(None)` is returned, read interest
-//! is automatically registered with the reactor an associated with the
+//! is automatically registered with the reactor and associated with the
 //! currently running task. The logic being that, by trying to read from the
 //! socket, the current task has indicated that read readiness is required for
 //! the task to make progress. Once the TCP socket becomes read ready, the
