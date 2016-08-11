@@ -26,7 +26,7 @@ impl<S, T> Server<S, T>
             run: true,
             service: service,
             transport: transport,
-            in_flight: try!(AwaitQueue::with_capacity(16)),
+            in_flight: try!(AwaitQueue::with_capacity(32)),
         })
     }
 }
@@ -39,31 +39,18 @@ impl<S, T, E> Task for Server<S, T>
     fn tick(&mut self) -> io::Result<Tick> {
         trace!("pipeline::Server::tick");
 
+        /*
+         *
+         * TODO: CLEAN THIS UP!
+         *
+         * This has been left messy after too many late nights of hacking...
+         *
+         */
+
         // The first action is always flushing the transport
-        let mut flush = try!(self.transport.flush());
+        try!(self.transport.flush());
 
-        // Handle completed responses
-        while self.transport.is_writable() {
-            trace!("pipeline transport is writable");
-
-            // Try to get the next completed future
-            match self.in_flight.poll() {
-                Some(Ok(val)) => {
-                    trace!("got in_flight value");
-                    flush = try!(self.transport.write(Frame::Message(val)));
-                }
-                Some(Err(e)) => {
-                    trace!("got in_flight error");
-                    flush = try!(self.transport.write(Frame::Error(e)));
-                },
-                None => {
-                    trace!("no response ready for write");
-                    break;
-                }
-            }
-        }
-
-        // Process new requests as long as the server is accepting
+        // First read off data from the socket
         while self.run {
             trace!("pipeline trying to read transport");
             match self.transport.read() {
@@ -72,7 +59,24 @@ impl<S, T, E> Task for Server<S, T>
                         Frame::Message(req) => {
                             trace!("pipeline got request");
                             let resp = self.service.call(req);
-                            self.in_flight.push(resp)
+
+                            // Fast path for immediate futures
+                            if self.transport.is_writable() {
+                                // Try to get the next completed future
+                                match self.in_flight.push_poll(resp) {
+                                    Some(Ok(val)) => {
+                                        trace!("got in_flight value");
+                                        try!(self.transport.write(Frame::Message(val)));
+                                    }
+                                    Some(Err(e)) => {
+                                        trace!("got in_flight error");
+                                        try!(self.transport.write(Frame::Error(e)));
+                                    },
+                                    None => {}
+                                }
+                            } else {
+                                self.in_flight.push(resp);
+                            }
                         }
                         Frame::Done => {
                             trace!("received Frame::Done");
@@ -99,6 +103,30 @@ impl<S, T, E> Task for Server<S, T>
                 }
             }
         }
+
+        // Handle completed responses
+        while self.transport.is_writable() {
+            trace!("pipeline transport is writable");
+
+            // Try to get the next completed future
+            match self.in_flight.poll() {
+                Some(Ok(val)) => {
+                    trace!("got in_flight value");
+                    try!(self.transport.write(Frame::Message(val)));
+                }
+                Some(Err(e)) => {
+                    trace!("got in_flight error");
+                    try!(self.transport.write(Frame::Error(e)));
+                },
+                None => {
+                    trace!("no response ready for write");
+                    break;
+                }
+            }
+        }
+
+        // Try flushing
+        let flush = try!(self.transport.flush());
 
         // Clean shutdown of the pipeline server can happen when
         //

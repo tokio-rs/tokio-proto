@@ -117,6 +117,7 @@ impl<T: NewTask> Task for Listener<T> {
 
         // As long as there are sockets to accept, accept and process them
         while let Some(socket) = try!(self.socket.accept()) {
+            trace!("accepted new TCP connection");
             let socket = try!(TcpStream::watch(socket));
             let task = try!(self.new_task.new_task(socket));
 

@@ -25,6 +25,7 @@ exclude       = [
 log = "0.3.6"
 mio = { git = "https://github.com/carllerche/mio", branch = "dev" }
 slab = { git = "https://github.com/carllerche/slab" }
+bytes = { git = "https://github.com/carllerche/bytes" }
 futures = "0.1.0"
 scoped-tls = "0.1.0"
 take = "0.1.0"

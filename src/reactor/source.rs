@@ -48,7 +48,7 @@ impl Source {
         let is_readable = self.inner.readiness.get().is_readable();
 
         if !is_readable {
-            self.interest(Ready::readable());
+            self.readable_interest();
         }
 
         is_readable
@@ -56,7 +56,7 @@ impl Source {
 
     /// Notify the reactor that the source is currently not readable
     pub fn unset_readable(&self) {
-        self.interest(Ready::readable());
+        self.readable_interest();
         let readiness = self.inner.readiness.get();
         self.inner.readiness.set(readiness - Ready::readable());
     }
@@ -67,7 +67,7 @@ impl Source {
         let is_writable = self.inner.readiness.get().is_writable();
 
         if !is_writable {
-            self.interest(Ready::writable());
+            self.writable_interest();
         }
 
         is_writable
@@ -75,7 +75,7 @@ impl Source {
 
     /// Notify the reactor that the source is currently not writable.
     pub fn unset_writable(&self) {
-        self.interest(Ready::writable());
+        self.writable_interest();
         let readiness = self.inner.readiness.get();
         self.inner.readiness.set(readiness - Ready::writable());
     }
@@ -84,6 +84,18 @@ impl Source {
     /// interest in the source.
     pub fn advance(&self) {
         EventLoop::current_task_did_advance()
+    }
+
+    /// Notify the reactor that the currently running Task has expressed
+    /// readable interest in the source.
+    fn readable_interest(&self) {
+        self.interest(Ready::readable());
+    }
+
+    /// Notify the reactor that the currently running Task has expressed
+    /// readable interest in the source.
+    fn writable_interest(&self) {
+        self.interest(Ready::writable());
     }
 
     /// Notify the reactor that the currently running FSM has expressed

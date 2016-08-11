@@ -102,11 +102,17 @@
 //! }
 //! ```
 
+mod framing;
 mod ready;
+mod stream;
 mod transport;
 
+pub use self::framing::{Framed, Parse, Serialize};
 pub use self::ready::{Readiness, Ready};
+pub use self::stream::Stream;
 pub use self::transport::Transport;
+
+use bytes::{Buf, MutBuf, ReadExt, WriteExt};
 use std::io;
 
 /// A refinement of `std::io::Read` for reading from non-blocking sources.
@@ -125,11 +131,23 @@ pub trait TryRead: io::Read {
     /// Aside from the signature, behavior is identical to `std::io::Read`. For
     /// more details, read the `std::io::Read` documentation.
     fn try_read(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>>;
+
+    /// Pull some bytes from this source into the specified `Buf`, returning
+    /// how many bytes were read.
+    fn try_read_buf<B: MutBuf>(&mut self, buf: &mut B) -> io::Result<Option<usize>>;
 }
 
 impl<T: io::Read> TryRead for T {
     fn try_read(&mut self, buf: &mut [u8]) -> io::Result<Option<usize>> {
         match self.read(buf) {
+            Ok(n) => Ok(Some(n)),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn try_read_buf<B: MutBuf>(&mut self, buf: &mut B) -> io::Result<Option<usize>> {
+        match self.read_buf(buf) {
             Ok(n) => Ok(Some(n)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e),
@@ -152,11 +170,22 @@ pub trait TryWrite: io::Write {
     /// Aside from the signature, behavior is identical to `std::io::Write`.
     /// For more details, read the `std::io::Write` documentation.
     fn try_write(&mut self, buf: &[u8]) -> io::Result<Option<usize>>;
+
+    /// Write a `Buf` into this object, returning how many bytes were written.
+    fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<Option<usize>>;
 }
 
 impl<T: io::Write> TryWrite for T {
     fn try_write(&mut self, buf: &[u8]) -> io::Result<Option<usize>> {
         match self.write(buf) {
+            Ok(n) => Ok(Some(n)),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<Option<usize>> {
+        match self.write_buf(buf) {
             Ok(n) => Ok(Some(n)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e),

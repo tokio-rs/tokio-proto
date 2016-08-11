@@ -47,7 +47,7 @@ pub struct EventLoop {
     // TODO: In order to avoid allocating for the handler here, it should be
     // possible to create slabs per service category, in which case the
     // concrete type would be known.
-    tasks: Slab<TaskCell, Token>,
+    tasks: Slab<Box<TaskHarness>, Token>,
     // Data that is shared at runtime to tasks via a thread-local. This is
     // splilt out to make the borrow checker happy
     rt: Rt,
@@ -74,7 +74,16 @@ struct Rt {
     current_task_did_advance: Cell<bool>,
     // New tasks that have been created during a task invocation and are
     // pending being registered with the EventLoop.
-    staged_tasks: Stack<Box<Task>>,
+    staged_tasks: Stack<Box<TaskHarness>>,
+}
+
+// Used to avoid some virtual dispatch
+trait TaskHarness {
+    fn tick(&mut self, token: Token, rt: &mut Rt) -> Tick;
+
+    fn try_tick_oneshot(&mut self, rt: &mut Rt) -> bool;
+
+    fn oneshot(&self) -> bool;
 }
 
 /// Info associated with the currently running task
@@ -85,10 +94,10 @@ pub struct TaskRef {
 }
 
 /// Internal task storage
-struct TaskCell {
+struct TaskCell<T> {
     tick_num: u64,
     poll_num: u64,
-    task: Box<Task>,
+    task: T,
 }
 
 /// Handle to a `Reactor` instance. Used for communication.
@@ -98,7 +107,7 @@ pub struct ReactorHandle {
 }
 
 enum Op {
-    Schedule(Box<Task + Send + 'static>),
+    Schedule(Box<TaskHarness + Send + 'static>),
 }
 
 // TODO: clean this up
@@ -116,7 +125,7 @@ const OP_RECEIVER: Token = Token(usize::MAX - 2);
 impl Default for Config {
     fn default() -> Config {
         Config {
-            max_sources: 1024,
+            max_sources: 65_536,
         }
     }
 }
@@ -166,7 +175,7 @@ impl Reactor {
         let event_loop = EventLoop {
             rx: rx,
             events: Events::with_capacity(256),
-            tasks: Slab::new(100),
+            tasks: Slab::new(65_536),
             rt: Rt {
                 run: Cell::new(true),
                 id: id,
@@ -199,7 +208,13 @@ impl ReactorHandle {
     /// Schedule the given `Task` on the reactor
     pub fn schedule<T: Task + Send + 'static>(&self, task: T) {
         // TODO: Figure out how to reduce boxing
-        self.tx.send(Op::Schedule(Box::new(task))).ok().unwrap();
+        let task = Box::new(TaskCell {
+            tick_num: 0,
+            poll_num: 0,
+            task: task,
+        });
+
+        self.tx.send(Op::Schedule(task)).ok().unwrap();
     }
 
     /// Run the given function on the reactor
@@ -229,7 +244,13 @@ impl ReactorHandle {
 ///
 /// If not currently on a reactor thread, this function panics.
 pub fn schedule<T: Task + 'static>(task: T) -> Result<()> {
-    with_current_rt(|rt| Ok(rt.staged_tasks.push(Box::new(task))))
+    let task = Box::new(TaskCell {
+        tick_num: 0,
+        poll_num: 0,
+        task: task,
+    });
+
+    with_current_rt(|rt| Ok(rt.staged_tasks.push(task)))
 }
 
 /// Run the given function on the reactor.
@@ -386,12 +407,16 @@ impl EventLoop {
     }
 
     fn process_source(&mut self, token: Token) {
-        let task = match self.rt.sources.borrow()[token].task() {
-            Some(t) => t,
-            None => {
-                debug!("source has no associated task; token={:?}", token);
-                return;
+        let task = match self.rt.sources.borrow().get(token) {
+            Some(source) => {
+                match source.task() {
+                    Some(t) => t,
+                    None => {
+                        return;
+                    }
+                }
             }
+            None => return,
         };
 
         self.execute_task(task);
@@ -418,14 +443,7 @@ impl EventLoop {
     fn process_op(&mut self, op: Op) -> io::Result<()> {
         match op {
             Op::Schedule(mut task) => {
-                if task.oneshot() {
-                    match self.rt.scope(None, || task.tick()) {
-                        Ok(Tick::Final) => {} // Expected return value
-                        Ok(Tick::WouldBlock) => warn!("oneshot `Task` returned `Tick::WouldBlock`"),
-                        Ok(Tick::Yield) => warn!("oneshot `Task` returned `Tick::Yield`"),
-                        Err(e) => warn!("oneshot `Task` returned error; err={:?}", e),
-                    }
-                } else {
+                if !task.try_tick_oneshot(&mut self.rt) {
                     self.add_task(task);
                 }
             }
@@ -442,13 +460,7 @@ impl EventLoop {
         }
     }
 
-    fn add_task(&mut self, task: Box<Task>) {
-        let task = TaskCell {
-            tick_num: 0,
-            poll_num: 0,
-            task: task,
-        };
-
+    fn add_task(&mut self, task: Box<TaskHarness>) {
         let token = match self.tasks.insert(task) {
             Ok(token) => token,
             Err(_) => unimplemented!(),
@@ -458,88 +470,9 @@ impl EventLoop {
     }
 
     fn execute_task(&mut self, token: Token) {
-        let mut task_shutdown = false;
+        trace!("running task; task={:?}", token);
 
-        {
-            let task = &mut self.tasks[token];
-
-            if task.poll_num == self.rt.poll_num {
-                // Task already has been executed this iteration of the event loop,
-                // so skip it
-                return;
-            }
-
-            task.poll_num = self.rt.poll_num;
-
-            while self.rt.run() {
-                // Increment the task's tick_num
-                task.tick_num += 1;
-
-                trace!("running task; task={:?}; tick={:?}", token, task.tick_num);
-
-                let task_ref = TaskRef {
-                    token: token,
-                    tick_num: task.tick_num,
-                };
-
-                // Run the task while setting the current event loop variable
-                let res = self.rt.scope(Some(task_ref), || task.task.tick());
-
-                match res {
-                    Ok(Tick::Final) => {
-                        debug!("finalizing task; token={:?}", token);
-                        task_shutdown = true;
-                        break;
-                    }
-                    Ok(Tick::Yield) => {
-
-                        // # Thoughts
-                        //
-                        // It is possible for a task to process sources without
-                        // hitting a would block. The problem here is that
-                        // there is no way for the reactor to detect that the
-                        // task is still ready. Imagine that the task reads
-                        // from a Transport that has data buffered in memory
-                        // and the read does not deplete the buffer. The
-                        // transport is still ready and the read did not hit
-                        // the underlying socket. Now, imagine the task
-                        // continues to work and reads from a source returning
-                        // would-block. In this case, the reactor observed that
-                        // 100% of the sources accessed by the task are not
-                        // ready.
-                        //
-                        // Now, the current requirement for implementing a task
-                        // is to read sources until a would-block his hit, but
-                        // this may not be desirable in all cases.
-                        //
-                        // One solution would be to add a Tick:Yield return
-                        // value.
-
-                        unimplemented!();
-                    }
-                    Ok(Tick::WouldBlock) => {
-                        // Task would have blocked. In this case, we must determine
-                        // if the FSM made any progress at all. If progress was
-                        // made, call the FSM until no progress was made.
-
-                        if !self.rt.current_task_did_advance.get() {
-                            trace!("current task made no progress");
-                            return;
-                        }
-
-                        trace!("current task made progress");
-                    }
-                    Err(_) => {
-                        // Task returned an error, in this case it has to be
-                        // cleaned up
-                        task_shutdown = true;
-                        break;
-                    }
-                }
-            }
-        }
-
-        if task_shutdown {
+        if let Tick::Final = self.tasks[token].tick(token, &mut self.rt) {
             let tasks = &mut self.tasks;
 
             self.rt.scope(None, || {
@@ -556,6 +489,102 @@ impl Drop for EventLoop {
         // TODO: Is there a better way to cleanup the resources?
         let tasks = &mut self.tasks;
         self.rt.scope(None, || tasks.clear());
+    }
+}
+
+impl<T: Task> TaskHarness for TaskCell<T> {
+    fn tick(&mut self, token: Token, rt: &mut Rt) -> Tick {
+        if self.poll_num == rt.poll_num {
+            // Task already has been executed this iteration of the event loop,
+            // so skip it
+            return Tick::WouldBlock;
+        }
+
+        self.poll_num = rt.poll_num;
+
+        while rt.run() {
+            // Increment the task's tick_num
+            self.tick_num += 1;
+
+            let task_ref = TaskRef {
+                token: token,
+                tick_num: self.tick_num,
+            };
+
+            // Run the task while setting the current event loop variable
+            let res = rt.scope(Some(task_ref), || self.task.tick());
+
+            match res {
+                Ok(Tick::Final) => {
+                    debug!("finalizing task; token={:?}", token);
+                    return Tick::Final;
+                }
+                Ok(Tick::Yield) => {
+
+                    // # Thoughts
+                    //
+                    // It is possible for a task to process sources without
+                    // hitting a would block. The problem here is that
+                    // there is no way for the reactor to detect that the
+                    // task is still ready. Imagine that the task reads
+                    // from a Transport that has data buffered in memory
+                    // and the read does not deplete the buffer. The
+                    // transport is still ready and the read did not hit
+                    // the underlying socket. Now, imagine the task
+                    // continues to work and reads from a source returning
+                    // would-block. In this case, the reactor observed that
+                    // 100% of the sources accessed by the task are not
+                    // ready.
+                    //
+                    // Now, the current requirement for implementing a task
+                    // is to read sources until a would-block his hit, but
+                    // this may not be desirable in all cases.
+                    //
+                    // One solution would be to add a Tick:Yield return
+                    // value.
+
+                    unimplemented!();
+                }
+                Ok(Tick::WouldBlock) => {
+                    // Task would have blocked. In this case, we must determine
+                    // if the FSM made any progress at all. If progress was
+                    // made, call the FSM until no progress was made.
+
+                    if !rt.current_task_did_advance.get() {
+                        trace!("current task made no progress");
+                        return Tick::WouldBlock;
+                    }
+
+                    trace!("current task made progress");
+                }
+                Err(_) => {
+                    // Task returned an error, in this case it has to be
+                    // cleaned up
+                    return Tick::Final;
+                }
+            }
+        }
+
+        Tick::WouldBlock
+    }
+
+    fn try_tick_oneshot(&mut self, rt: &mut Rt) -> bool {
+        if self.task.oneshot() {
+            match rt.scope(None, || self.task.tick()) {
+                Ok(Tick::Final) => {} // Expected return value
+                Ok(Tick::WouldBlock) => warn!("oneshot `Task` returned `Tick::WouldBlock`"),
+                Ok(Tick::Yield) => warn!("oneshot `Task` returned `Tick::Yield`"),
+                Err(e) => warn!("oneshot `Task` returned error; err={:?}", e),
+            }
+
+            true
+        } else {
+            false
+        }
+    }
+
+    fn oneshot(&self) -> bool {
+        self.task.oneshot()
     }
 }
 

@@ -2,6 +2,7 @@
 
 use io::{Readiness, Ready};
 use reactor::{self, Source};
+use mio::would_block;
 use mio::tcp as mio;
 use std::io::{self, Read, Write};
 use std::net::SocketAddr;
@@ -209,8 +210,4 @@ impl<'a> io::Write for &'a TcpStream {
         // Does nothing
         Ok(())
     }
-}
-
-fn would_block() -> io::Error {
-    io::Error::new(io::ErrorKind::WouldBlock, "would block")
 }

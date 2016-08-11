@@ -31,6 +31,7 @@ extern crate mio;
 extern crate slab;
 extern crate futures;
 extern crate take;
+extern crate bytes;
 
 #[macro_use]
 extern crate scoped_tls;
