@@ -124,6 +124,9 @@ impl<T, P, S> Transport for Framed<T, P, S>
     }
 
     fn flush(&mut self) -> io::Result<Option<()>> {
+        // Try flushing the underlying IO
+        let _ = try!(self.upstream.try_flush());
+
         trace!("flushing framed transport");
 
         loop {

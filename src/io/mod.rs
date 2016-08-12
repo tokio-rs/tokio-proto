@@ -173,6 +173,9 @@ pub trait TryWrite: io::Write {
 
     /// Write a `Buf` into this object, returning how many bytes were written.
     fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<Option<usize>>;
+
+    /// Try flushing the underlying IO
+    fn try_flush(&mut self) -> io::Result<Option<()>>;
 }
 
 impl<T: io::Write> TryWrite for T {
@@ -187,6 +190,14 @@ impl<T: io::Write> TryWrite for T {
     fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<Option<usize>> {
         match self.write_buf(buf) {
             Ok(n) => Ok(Some(n)),
+            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn try_flush(&mut self) -> io::Result<Option<()>> {
+        match self.flush() {
+            Ok(()) => Ok(Some(())),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(None),
             Err(e) => Err(e),
         }
