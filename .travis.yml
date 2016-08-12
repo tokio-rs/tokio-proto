@@ -2,8 +2,6 @@ language: rust
 rust:
   - nightly
   - stable
-  # The following Rust version represents the oldest supported version of Mio.
-  # This value should not be changed without prior discussion.
   - 1.10.0
 
 os:
@@ -11,8 +9,25 @@ os:
   - osx
 
 matrix:
-    allow_failures:
-        - rust: nightly
+  allow_failures:
+    - rust: nightly
 
 script:
   - cargo test
+  - cargo doc --no-deps
+
+deploy:
+  provider: s3
+  access_key_id: AKIAISVZFP2MDUU6KA5A
+  secret_access_key:
+    secure: aJ3Zr8KWckyaIxJNllQrX1Qbs0lMmz5D2xa+lPZDn8o9rDWHOrULS0jnhayIL4T8yIhukIjaiQnHHihiAounB4Ftg7gqIzwiUC/IHTjIO5JJvXoBnrZTycemEfk1BeEjUoiSFLZmqoxAnIt6AAlKDxkDBrTozvQa1UC6lbz+RuNwijKVS5U8I0jWTQwvKXQOm7XX1O0IOIuWm18Wab04QWlmad+8lz7ZF6HQem4C123+jaDJ6OwjeKs39wR06+DrIFReh4/uZShKx0vRYsJqWh9ItYsu63sm/W93Wb9rwTzz2BwSiJGNvW3ljCeWNAJq+zxdPVdjomQ4XjrQmMZVxs+m6zsfXIflBpfsLMka76lWbz1UIEIMRx2N6KwDMCysAYqfjZvUBwRiShu2uq2Y9yWHiCtNIoiibnAgP02BHwWvTioxSOaAsVU7LHeDPXa8oHPlp4xrsst+gfxnXSN6fdsjlzKrFIRm1k9X9gOIl4QFgMTUzhDwc8oos4ROz8+ltMupEPbzMy+M8LYx9M9+TvLGpUjGdabDyu5X2PItuwik0fAPyEZow/vmAOX7dMooUui5o1tuG4MR4bYKR1UpMSW+72II9gFWkTQugQlTI3x+YXpSTPD8PHtHMcT1iOOKIkYnP9uvXDvb5lycTQlHnI/cB7E48ax36g/Gqfhm1NQ=
+  bucket: rust-doc
+  skip_cleanup: true
+  local-dir: target/doc
+  upload-dir: tokio/${TRAVIS_BRANCH}
+  acl: public_read
+  on:
+    condition: $TRAVIS_RUST_VERSION == "1.10.0" && $TRAVIS_OS_NAME == "linux"
+    repo: tokio-rs/tokio
+    branch:
+      - master
