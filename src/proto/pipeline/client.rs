@@ -6,6 +6,11 @@ use util::future::{self, Complete, Val};
 use mio::channel;
 use std::io;
 use std::net::SocketAddr;
+use std::collections::VecDeque;
+
+// TODO:
+//
+// - On drop, drain in_flight and complete w/ broken pipe error
 
 /// Client `Service` for the pipeline protocol.
 ///
@@ -23,7 +28,8 @@ struct Client<T, E>
     run: bool,
     transport: T,
     requests: Receiver<(T::In, Complete<T::Out, E>)>,
-    in_flight: Vec<Complete<T::Out, E>>,
+    is_flushed: bool,
+    in_flight: VecDeque<Complete<T::Out, E>>,
 }
 
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
@@ -46,7 +52,8 @@ pub fn connect<T>(reactor: &ReactorHandle, addr: SocketAddr, new_transport: T)
             run: true,
             transport: transport,
             requests: rx,
-            in_flight: Vec::with_capacity(16),
+            is_flushed: true,
+            in_flight: VecDeque::with_capacity(32),
         })
     }));
 
@@ -83,47 +90,64 @@ impl<T, U, E> Clone for ClientHandle<T, U, E>
     }
 }
 
-impl<T, E> Task for Client<T, E>
+impl<T, E> Client<T, E>
     where T: Transport,
           E: Send + 'static,
 {
-    fn tick(&mut self) -> io::Result<Tick> {
-        trace!("pipeline::Client::tick");
+    fn is_done(&self) -> bool {
+        !self.run && self.is_flushed && self.in_flight.is_empty()
+    }
 
-        // The first action is always flushing the transport
-        let mut flush = try!(self.transport.flush());
+    fn flush(&mut self) -> io::Result<()> {
+        self.is_flushed = try!(self.transport.flush()).is_some();
+        Ok(())
+    }
 
-        // Process responses
-        loop {
-            match self.transport.read() {
-                Ok(Some(frame)) => {
-                    match frame {
-                        Frame::Message(resp) => {
-                            trace!("pipeline got response");
+    fn read_response_frames(&mut self) -> io::Result<()> {
+        trace!("pipeline trying to read transport");
 
-                            let c = self.in_flight.remove(0);
-                            c.complete(resp);
-                        }
-                        Frame::Done => {
-                            unimplemented!();
-                        }
-                        _ => unimplemented!(),
-                    }
-                }
-                Ok(None) => break,
-                Err(_) => unimplemented!(),
-            }
+        while let Some(frame) = try!(self.transport.read()) {
+            try!(self.process_response_frame(frame));
         }
 
+        Ok(())
+    }
+
+    fn process_response_frame(&mut self, frame: Frame<T::Out, T::Error>)
+        -> io::Result<()>
+    {
+        match frame {
+            Frame::Message(response) => {
+                trace!("pipeline got response");
+
+                if let Some(complete) = self.in_flight.pop_front() {
+                    complete.complete(response);
+                } else {
+                    return Err(io::Error::new(io::ErrorKind::Other, "request / response mismatch"));
+                }
+            }
+            Frame::Done => {
+                unimplemented!();
+            }
+            _ => unimplemented!(),
+        }
+
+        Ok(())
+    }
+
+    fn write_request_frames(&mut self) -> io::Result<()> {
         // Process new requests
         while self.run && self.transport.is_writable() {
+            // Try to get a new request frame
             match self.requests.recv() {
-                Ok(Some((req, c))) => {
+                Ok(Some((request, complete))) => {
                     trace!("received request");
 
                     // Write the request to the transport
-                    flush = try!(self.transport.write(Frame::Message(req)));
-                    self.in_flight.push(c);
+                    try!(self.transport.write(Frame::Message(request)));
+
+                    // Track complete handle
+                    self.in_flight.push_back(complete);
                 }
                 Ok(None) => {
                     trace!("request queue is empty");
@@ -139,7 +163,30 @@ impl<T, E> Task for Client<T, E>
             }
         }
 
-        if !self.run && flush.is_some() && self.in_flight.is_empty() {
+        Ok(())
+    }
+}
+
+impl<T, E> Task for Client<T, E>
+    where T: Transport,
+          E: Send + 'static,
+{
+    fn tick(&mut self) -> io::Result<Tick> {
+        trace!("pipeline::Client::tick");
+
+        // Always flush the transport first
+        try!(self.flush());
+
+        // First, read data from the socket
+        try!(self.read_response_frames());
+
+        // Write all pendign request frames
+        try!(self.write_request_frames());
+
+        // Try flushing buffered writes
+        try!(self.flush());
+
+        if self.is_done() {
             return Ok(Tick::Final);
         }
 

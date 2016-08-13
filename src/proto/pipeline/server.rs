@@ -38,6 +38,7 @@ impl<S, T, E> Server<S, T>
         })
     }
 
+    /// Returns true if the pipeline server dispatch has nothing left to do
     fn is_done(&self) -> bool {
         !self.run && self.is_flushed && self.in_flight.is_empty()
     }
@@ -45,18 +46,18 @@ impl<S, T, E> Server<S, T>
     fn read_request_frames(&mut self) -> io::Result<()> {
         while self.run {
             trace!("pipeline trying to read transport");
-            match try!(self.transport.read()) {
-                Some(frame) => {
-                    try!(self.process_frame(frame));
-                }
-                None => break,
+
+            if let Some(frame) = try!(self.transport.read()) {
+                try!(self.process_request_frame(frame));
+            } else {
+                break;
             }
         }
 
         Ok(())
     }
 
-    fn process_frame(&mut self, frame: Frame<S::Req, E>) -> io::Result<()> {
+    fn process_request_frame(&mut self, frame: Frame<S::Req, E>) -> io::Result<()> {
         match frame {
             Frame::Message(request) => {
                 trace!("pipeline got request");
@@ -146,7 +147,7 @@ impl<S, T, E> Task for Server<S, T>
     fn tick(&mut self) -> io::Result<Tick> {
         trace!("pipeline::Server::tick");
 
-        // The first action is always flushing the transport
+        // Always flush the transport first
         try!(self.flush());
 
         // First read off data from the socket
