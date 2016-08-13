@@ -40,6 +40,7 @@ pub enum Tick {
     /// The task would have blocked and has more work to do
     WouldBlock,
     /// The task could do more work, but is yielding execution
+    // TODO: Is this needed?
     Yield,
     /// The task has completed all work
     Final,
