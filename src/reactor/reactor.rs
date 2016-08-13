@@ -519,32 +519,6 @@ impl<T: Task> TaskHarness for TaskCell<T> {
                     debug!("finalizing task; token={:?}", token);
                     return Tick::Final;
                 }
-                Ok(Tick::Yield) => {
-
-                    // # Thoughts
-                    //
-                    // It is possible for a task to process sources without
-                    // hitting a would block. The problem here is that
-                    // there is no way for the reactor to detect that the
-                    // task is still ready. Imagine that the task reads
-                    // from a Transport that has data buffered in memory
-                    // and the read does not deplete the buffer. The
-                    // transport is still ready and the read did not hit
-                    // the underlying socket. Now, imagine the task
-                    // continues to work and reads from a source returning
-                    // would-block. In this case, the reactor observed that
-                    // 100% of the sources accessed by the task are not
-                    // ready.
-                    //
-                    // Now, the current requirement for implementing a task
-                    // is to read sources until a would-block his hit, but
-                    // this may not be desirable in all cases.
-                    //
-                    // One solution would be to add a Tick:Yield return
-                    // value.
-
-                    unimplemented!();
-                }
                 Ok(Tick::WouldBlock) => {
                     // Task would have blocked. In this case, we must determine
                     // if the FSM made any progress at all. If progress was
@@ -554,6 +528,9 @@ impl<T: Task> TaskHarness for TaskCell<T> {
                         trace!("current task made no progress");
                         return Tick::WouldBlock;
                     }
+
+                    // TODO: the task should be deferred until the next event
+                    // loop tick.
 
                     trace!("current task made progress");
                 }
@@ -573,7 +550,6 @@ impl<T: Task> TaskHarness for TaskCell<T> {
             match rt.scope(None, || self.task.tick()) {
                 Ok(Tick::Final) => {} // Expected return value
                 Ok(Tick::WouldBlock) => warn!("oneshot `Task` returned `Tick::WouldBlock`"),
-                Ok(Tick::Yield) => warn!("oneshot `Task` returned `Tick::Yield`"),
                 Err(e) => warn!("oneshot `Task` returned error; err={:?}", e),
             }
 
