@@ -1,6 +1,7 @@
 //! A concrete implementation of `futures::Future`. It is similar in spirit as
 //! `futures::Promise`, but is better suited for use with Tokio.
 
+use super::{Cancellation, SyncFuture, Callback};
 use futures::{Future, Poll, Task};
 use std::mem;
 use std::cell::Cell;
@@ -23,20 +24,6 @@ pub struct Complete<T, E> {
     cancellation: Cell<bool>,
 }
 
-/// A future representing the cancellation in interest by the consumer of
-/// `Val`.
-///
-/// If a `Val` is dropped without ever attempting to read the value, then it
-/// becomes impossible to ever receive the result of the underlying
-/// computation. This indicates that there is no interest in the computation
-/// and it may be cancelled.
-///
-/// In this case, this future will be completed. The asynchronous computation
-/// is able to listen for this completion and abort work early.
-pub struct Cancellation {
-    inner: Arc<SyncFuture>,
-}
-
 // Currently implemented with a mutex, but this is only to get something
 // working. This should be rewritten to use a lock free strategy.
 struct Inner<T, E> {
@@ -52,8 +39,6 @@ enum State<T, E> {
     Cancelled,
     Consumed,
 }
-
-type Callback = Box<FnBox>;
 
 /// Create and return a new `Complete` / `Val` pair.
 ///
@@ -146,32 +131,13 @@ impl<T, E> Complete<T, E>
         }
 
         self.cancellation.set(true);
-        Cancellation { inner: self.inner.clone() }
+        Cancellation::new(self.inner.clone())
     }
 }
 
 impl<T, E> Drop for Complete<T, E> {
     fn drop(&mut self) {
         self.inner.complete(None, false);
-    }
-}
-
-/*
- *
- * ===== Cancellation =====
- *
- */
-
-impl Future for Cancellation {
-    type Item = bool;
-    type Error = ();
-
-    fn poll(&mut self, task: &mut Task) -> Poll<bool, ()> {
-        self.inner.poll(task)
-    }
-
-    fn schedule(&mut self, task: &mut Task) {
-        self.inner.schedule(task)
     }
 }
 
@@ -268,14 +234,6 @@ impl<T, E> Inner<T, E> {
     }
 }
 
-// A little hacky, but implementing Future on Inner allows losing the generics
-// on Cancellation
-trait SyncFuture: Send + Sync + 'static {
-    fn poll(&self, task: &mut Task) -> Poll<bool, ()>;
-
-    fn schedule(&self, task: &mut Task);
-}
-
 impl<T, E> SyncFuture for Inner<T, E>
     where T: Send + 'static,
           E: Send + 'static,
@@ -297,6 +255,7 @@ impl<T, E> SyncFuture for Inner<T, E>
             let handle = task.handle().clone();
             state.set_cancellation_cb(Box::new(move || handle.notify()));
         } else {
+            drop(state);
             task.handle().notify();
         }
     }
@@ -335,18 +294,6 @@ impl<T, E> State<T, E> {
     /// Sets the current state to Consumed and returns the original value
     fn take(&mut self) -> State<T, E> {
         mem::replace(self, State::Consumed)
-    }
-}
-
-trait FnBox: Send + 'static {
-    fn call_box(self: Box<Self>);
-}
-
-impl<F> FnBox for F
-    where F: FnOnce() + Send + 'static
-{
-    fn call_box(self: Box<F>) {
-        (*self)()
     }
 }
 
