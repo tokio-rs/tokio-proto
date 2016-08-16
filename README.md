@@ -38,6 +38,13 @@ coming to Hyper in version 0.10.
 
 A basic Redis client built with Tokio.
 
+## Related Articles
+
+If you're interested in building with Tokio you may want to check out the following articles:
+
+* [Introduction to Futures](http://aturon.github.io/blog/2016/08/11/futures/) which this crate is based on.
+* [Carl's Introduction to Tokio](https://medium.com/@carllerche/announcing-tokio-df6bb4ddb34#.s2jti29o3) to the crate.
+
 ## License
 
 Tokio is primarily distributed under the terms of both the MIT license
