@@ -80,10 +80,6 @@ struct Rt {
 // Used to avoid some virtual dispatch
 trait TaskHarness {
     fn tick(&mut self, token: Token, rt: &mut Rt) -> Tick;
-
-    fn try_tick_oneshot(&mut self, rt: &mut Rt) -> bool;
-
-    fn oneshot(&self) -> bool;
 }
 
 /// Info associated with the currently running task
@@ -442,11 +438,7 @@ impl EventLoop {
 
     fn process_op(&mut self, op: Op) -> io::Result<()> {
         match op {
-            Op::Schedule(mut task) => {
-                if !task.try_tick_oneshot(&mut self.rt) {
-                    self.add_task(task);
-                }
-            }
+            Op::Schedule(task) => self.add_task(task),
         }
 
         self.process_queued();
@@ -543,24 +535,6 @@ impl<T: Task> TaskHarness for TaskCell<T> {
         }
 
         Tick::WouldBlock
-    }
-
-    fn try_tick_oneshot(&mut self, rt: &mut Rt) -> bool {
-        if self.task.oneshot() {
-            match rt.scope(None, || self.task.tick()) {
-                Ok(Tick::Final) => {} // Expected return value
-                Ok(Tick::WouldBlock) => warn!("oneshot `Task` returned `Tick::WouldBlock`"),
-                Err(e) => warn!("oneshot `Task` returned error; err={:?}", e),
-            }
-
-            true
-        } else {
-            false
-        }
-    }
-
-    fn oneshot(&self) -> bool {
-        self.task.oneshot()
     }
 }
 
