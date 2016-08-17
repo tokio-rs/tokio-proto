@@ -164,6 +164,7 @@ impl<T, E> Inner<T, E> {
             Init { consumer, .. } => cb = consumer,
             s => {
                 if res.is_some() {
+                    drop(state);
                     panic!("attempting to complete already completed future");
                 } else {
                     *state = s;
@@ -213,7 +214,10 @@ impl<T, E> Inner<T, E> {
                 Completed(Some(Ok(v))) => Poll::Ok(v),
                 Completed(Some(Err(e))) => Poll::Err(e),
                 Completed(None) => panic!("Complete dropped without producing a value"),
-                Consumed => panic!("Val already consumed"),
+                Consumed => {
+                    drop(state);
+                    panic!("Val already consumed");
+                }
                 _ => unreachable!(),
             }
         } else {

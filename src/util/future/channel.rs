@@ -256,7 +256,10 @@ impl<T, E> Future for BusySender<T, E>
                 Cancelled => {
                     return Poll::Err(BusySendError);
                 }
-                _ => unreachable!(),
+                _ => {
+                    drop(state);
+                    panic!("unexpected state");
+                }
             }
         }
 
@@ -300,6 +303,9 @@ impl<T, E> Inner<T, E> {
             Init { consumer, cancellation } => {
                 cb_consumer = consumer;
                 cb_cancellation = cancellation;
+            }
+            Cancelled => {
+                return Err(res);
             }
             _ => panic!("unexpected state"),
         }

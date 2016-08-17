@@ -111,6 +111,5 @@ pub use self::source::Source;
 pub use self::task::{
     Task,
     Tick,
-    NewTask,
     IntoTick,
 };

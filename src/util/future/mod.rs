@@ -7,13 +7,18 @@
 //! written) and `AwaitQueue` provide facilities for notifying the Reactor when
 //! a future completes and may be polled.
 
+mod await;
 mod channel;
 mod queue;
 mod val;
 
 pub use self::channel::{channel, Sender, BusySender, Receiver};
-pub use self::queue::AwaitQueue;
 pub use self::val::{pair, Complete, Val};
+
+#[doc(hidden)]
+pub use self::queue::AwaitQueue;
+#[doc(hidden)]
+pub use self::await::{Await, AwaitStream};
 
 use futures::{Future, Poll, Task};
 use std::sync::Arc;

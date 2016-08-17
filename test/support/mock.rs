@@ -76,7 +76,7 @@ pub fn transport<In, Out>() -> (TransportHandle<In, Out>, NewTransport<In, Out>)
     (handle, new_transport)
 }
 
-impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
+impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
 
     /// Send a message to the transport.
     ///
@@ -152,7 +152,6 @@ impl<In: fmt::Debug, Out: fmt::Debug> TransportHandle<In, Out> {
 
 impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
     where In: fmt::Debug,
-          Out: fmt::Debug,
 {
     type In = In;
     type Out = Out;
@@ -165,12 +164,10 @@ impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
 
         match self.io.inner.lock().unwrap().recv() {
             Some(Ok(v)) => {
-                trace!("transport read; frame={:?}", v);
                 self.source.advance();
                 Ok(Some(v))
             }
             Some(Err(e)) => {
-                trace!("transport read; error={:?}", e);
                 self.source.advance();
                 Err(e)
             }

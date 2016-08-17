@@ -1,4 +1,3 @@
-use tcp::TcpStream;
 use take::Take;
 use std::io;
 
@@ -24,15 +23,6 @@ pub trait Task {
     fn oneshot(&self) -> bool {
         false
     }
-}
-
-/// Creates new `Task` values
-pub trait NewTask: Send + 'static {
-    /// The `Task` value created by this factory
-    type Item: Task;
-
-    /// Create and return a new `Task` value
-    fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item>;
 }
 
 /// Informs the `Reactor` how to process the current task
@@ -105,27 +95,5 @@ impl IntoTick for io::Result<Tick> {
 
     fn oneshot() -> bool {
         false
-    }
-}
-
-impl<T, U> NewTask for T
-    where T: Fn(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Task,
-{
-    type Item = U;
-
-    fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item> {
-        self(stream)
-    }
-}
-
-impl<T, U> NewTask for Take<T>
-    where T: FnOnce(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Task,
-{
-    type Item = U;
-
-    fn new_task(&self, stream: TcpStream) -> io::Result<U> {
-        self.take()(stream)
     }
 }

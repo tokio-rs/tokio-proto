@@ -13,7 +13,7 @@ matrix:
     - rust: nightly
 
 script:
-  - cargo test
+  - RUST_BACKTRACE=1 cargo test
   - cargo doc --no-deps
 
 deploy:

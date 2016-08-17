@@ -1,8 +1,9 @@
 //! A generic Tokio TCP server implementation.
 
 use tcp::{TcpListener, TcpStream};
-use reactor::{self, ReactorHandle, Task, NewTask, Tick};
+use reactor::{self, ReactorHandle, Task, Tick};
 use mio::tcp as mio;
+use take::Take;
 use std::io;
 use std::net::SocketAddr;
 
@@ -14,6 +15,17 @@ pub struct ServerHandle {
 struct Listener<T> {
     socket: TcpListener,
     new_task: T,
+}
+
+
+
+/// Create a new `Task` to handle a server socket.
+pub trait NewTask: Send + 'static {
+    /// The `Task` value created by this factory
+    type Item: Task;
+
+    /// Create and return a new `Task` value
+    fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item>;
 }
 
 /// Spawn a new `Task` that binds to the given `addr` then accepts all incoming
@@ -125,5 +137,27 @@ impl<T: NewTask> Task for Listener<T> {
         }
 
         Ok(Tick::WouldBlock)
+    }
+}
+
+impl<T, U> NewTask for T
+    where T: Fn(TcpStream) -> io::Result<U> + Send + 'static,
+          U: Task,
+{
+    type Item = U;
+
+    fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item> {
+        self(stream)
+    }
+}
+
+impl<T, U> NewTask for Take<T>
+    where T: FnOnce(TcpStream) -> io::Result<U> + Send + 'static,
+          U: Task,
+{
+    type Item = U;
+
+    fn new_task(&self, stream: TcpStream) -> io::Result<U> {
+        self.take()(stream)
     }
 }

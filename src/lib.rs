@@ -39,7 +39,6 @@ extern crate scoped_tls;
 #[macro_use]
 extern crate log;
 
-pub mod client;
 pub mod io;
 pub mod proto;
 pub mod reactor;
