@@ -45,7 +45,7 @@ pub enum Frame<T, E> {
     Done,
 }
 
-/// Error returned as an Error frame or an io::Error that occurerred during
+/// Error returned as an Error frame or an `io::Error` that occurerred during
 /// normal processing of the Transport
 pub enum Error<E> {
     /// Transport frame level error
@@ -167,7 +167,7 @@ impl<F, T> NewTransport for F
 impl From<Error<io::Error>> for io::Error {
     fn from(err: Error<io::Error>) -> Self {
         match err {
-            Error::Transport(e) => e,
+            Error::Transport(e) |
             Error::Io(e) => e,
         }
     }

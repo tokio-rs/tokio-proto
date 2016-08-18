@@ -151,7 +151,7 @@ impl<T> AwaitQueue<T>
 
         trace!("AwaitQueue::schedule_future");
 
-        let mut task = self.task.take().unwrap_or_else(|| Task::new());
+        let mut task = self.task.take().unwrap_or_else(Task::new);
 
         self.in_flight = true;
 

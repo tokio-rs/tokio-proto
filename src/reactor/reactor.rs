@@ -554,7 +554,7 @@ impl Rt {
         // Set the currently running task
         self.current_task = task;
 
-        CURRENT_RT.set(self, move || f())
+        CURRENT_RT.set(self, f)
     }
 }
 
