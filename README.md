@@ -22,6 +22,10 @@ extern crate tokio;
 
 And then, use Tokio!
 
+## Getting Help
+If you have questions or need further help getting started, consider joining
+the chat in our [Gitter Channel](http://gitter.im/tokio-rs/tokio).
+
 ## Built with Tokio
 
 **[Tokio Line](https://github.com/tokio-rs/tokio-line)**
