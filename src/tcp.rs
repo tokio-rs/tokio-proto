@@ -57,16 +57,17 @@ impl TcpListener {
         }
 
         match self.mio.accept() {
-            Ok(Some((socket, _))) => {
+            Ok((socket, _)) => {
                 self.source.advance();
                 Ok(Some(socket))
             }
-            Ok(None) => {
-                self.source.unset_readable();
-                Ok(None)
-            }
             Err(e) => {
-                self.source.advance();
+                if e.kind() == io::ErrorKind::WouldBlock {
+                    self.source.unset_readable();
+                } else {
+                    self.source.advance();
+                }
+
                 Err(e)
             }
         }

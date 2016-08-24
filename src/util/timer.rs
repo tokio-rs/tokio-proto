@@ -12,7 +12,7 @@ pub struct Timer<T> {
     source: Source,
 }
 
-pub use mio::{Timeout, TimerError};
+pub use mio::timer::{Timeout, TimerError};
 
 /// A specialized `Result` type for timer operations.
 pub type Result<T> = ::std::result::Result<T, TimerError>;
