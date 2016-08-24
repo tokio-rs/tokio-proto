@@ -13,14 +13,13 @@ use std::collections::VecDeque;
 /// Initiated requests are sent to the client pipeline task running on the
 /// Reactor where they are processed. The response is returned by completing
 /// the future.
-///
-/// TODO: Rename -> Client
-pub struct ClientHandle<T, B, E>
-    where T: Transport<Error = E>,
-          B: Stream<Item = T::BodyIn, Error = E>,
+pub struct Client<Req, Resp, ReqBody, E>
+    where Req: Send + 'static,
+          Resp: Send + 'static,
+          ReqBody: Stream<Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    tx: channel::Sender<(Message<T::In, B>, Complete<T::Out, E>)>,
+    tx: channel::Sender<(Message<Req, ReqBody>, Complete<Resp, E>)>,
 }
 
 struct Dispatch<T, B, E>
@@ -34,10 +33,10 @@ struct Dispatch<T, B, E>
 
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
 pub fn connect<T, B, E>(reactor: &ReactorHandle, new_transport: T)
-        -> ClientHandle<T::Item, B, E>
-        where T: NewTransport<Error = E>,
-              B: Stream<Item = T::BodyIn, Error = E>,
-              E: From<Error<E>> + Send + 'static,
+        -> Client<T::In, T::Out, B, E>
+    where T: NewTransport<Error = E>,
+          B: Stream<Item = T::BodyIn, Error = E>,
+          E: From<Error<E>> + Send + 'static,
 {
     let (tx, rx) = channel::channel();
 
@@ -61,16 +60,17 @@ pub fn connect<T, B, E>(reactor: &ReactorHandle, new_transport: T)
         Ok(())
     });
 
-    ClientHandle { tx: tx }
+    Client { tx: tx }
 }
 
-impl<T, B, E> Service for ClientHandle<T, B, E>
-    where T: Transport<Error = E> + 'static,
-          B: Stream<Item = T::BodyIn, Error = E>,
+impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
+    where Req: Send + 'static,
+          Resp: Send + 'static,
+          ReqBody: Stream<Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    type Req = Message<T::In, B>;
-    type Resp = T::Out;
+    type Req = Message<Req, ReqBody>;
+    type Resp = Resp;
     type Error = E;
     type Fut = Val<Self::Resp, E>;
 
@@ -84,13 +84,14 @@ impl<T, B, E> Service for ClientHandle<T, B, E>
     }
 }
 
-impl<T, B, E> Clone for ClientHandle<T, B, E>
-    where T: Transport<Error = E>,
-          B: Stream<Item = T::BodyIn, Error = E>,
+impl<Req, Resp, ReqBody, E> Clone for Client<Req, Resp, ReqBody, E>
+    where Req: Send + 'static,
+          Resp: Send + 'static,
+          ReqBody: Stream<Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    fn clone(&self) -> ClientHandle<T, B, E> {
-        ClientHandle { tx: self.tx.clone() }
+    fn clone(&self) -> Client<Req, Resp, ReqBody, E> {
+        Client { tx: self.tx.clone() }
     }
 }
 

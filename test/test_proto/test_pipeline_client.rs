@@ -9,7 +9,7 @@ use std::io;
 type TransportHandle = mock::TransportHandle<Frame, Frame>;
 
 // Client handle
-type ClientHandle = pipeline::ClientHandle<mock::Transport<Frame, Frame>, Body, io::Error>;
+type Client = pipeline::Client<&'static str, &'static str, Body, io::Error>;
 
 // In frame
 type Frame = pipeline::Frame<&'static str, io::Error, u32>;
@@ -82,7 +82,7 @@ fn test_streaming_response_body() {
 
 /// Setup a reactor running a pipeline::Client and a mock transport. Yields the
 /// mock transport handle to the function.
-fn run<F>(f: F) where F: FnOnce(TransportHandle, ClientHandle) {
+fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
     use take::Take;
 
     let _ = ::env_logger::init();

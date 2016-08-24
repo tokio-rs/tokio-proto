@@ -28,7 +28,7 @@ mod client;
 mod server;
 mod pipeline;
 
-pub use self::client::{connect, ClientHandle};
+pub use self::client::{connect, Client};
 pub use self::server::Server;
 
 use Service;
