@@ -33,17 +33,24 @@ pub use self::server::Server;
 
 use Service;
 use io::{Readiness};
-use util::future::Sender;
+use util::future::{Empty, Sender};
 use futures::Future;
 use futures::stream::Stream;
 use take::Take;
-use std::{fmt, io};
+use std::{cmp, fmt, io, ops};
 
 /// A pipelined protocol frame
-#[derive(PartialEq, Eq, Clone)]
-pub enum Frame<T, E, B = ()> {
+pub enum Frame<T, E, B = ()>
+    where E: Send + 'static,
+          B: Send + 'static,
+{
     /// Either a request or a response
     Message(T),
+    /// Returned by `Transport::read` when a streaming body will follow.
+    /// Subsequent body frames will be proxied to the provided `Sender`.
+    ///
+    /// Calling `Transport::write` with Frame::MessageWithBody is an error.
+    MessageWithBody(T, Sender<B, E>),
     /// Body frame. None indicates that the body is done streaming.
     Body(Option<B>),
     /// Error
@@ -52,8 +59,13 @@ pub enum Frame<T, E, B = ()> {
     Done,
 }
 
-/// Frame read from a pipeline transport
-pub type OutFrame<T, E, B = ()> = Frame<(T, Option<Sender<B, E>>), E, B>;
+/// Message sent and received from a pipeline service
+pub enum Message<T, B = Empty<(), ()>> {
+    /// Has no associated streaming body
+    WithoutBody(T),
+    /// Has associated streaming body
+    WithBody(T, B),
+}
 
 /// Error returned as an Error frame or an `io::Error` that occurerred during
 /// normal processing of the Transport
@@ -85,7 +97,7 @@ pub trait ServerService: Send + 'static {
     type Error: Send + 'static;
 
     /// The future response value.
-    type Fut: Future<Item = (Self::Resp, Option<Self::BodyStream>), Error = Self::Error>;
+    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error>;
 
     /// Process the request and return the response asynchronously.
     fn call(&self, req: Self::Req) -> Self::Fut;
@@ -112,7 +124,7 @@ pub trait Transport: Readiness {
     type Error: Send + 'static; // TODO: rename
 
     /// Read a message from the `Transport`
-    fn read(&mut self) -> io::Result<Option<OutFrame<Self::Out, Self::Error, Self::BodyOut>>>;
+    fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::Error, Self::BodyOut>>>;
 
     /// Write a message to the `Transport`
     fn write(&mut self, req: Frame<Self::In, Self::Error, Self::BodyIn>) -> io::Result<Option<()>>;
@@ -152,12 +164,21 @@ pub trait NewTransport: Send + 'static {
     fn new_transport(&self) -> io::Result<Self::Item>;
 }
 
+/*
+ *
+ * ===== impl Frame =====
+ *
+ */
+
 impl<T, E, B> Frame<T, E, B>
+    where E: Send + 'static,
+          B: Send + 'static,
 {
     /// Unwraps a frame, yielding the content of the `Message`.
     pub fn unwrap_msg(self) -> T {
         match self {
             Frame::Message(v) => v,
+            Frame::MessageWithBody(v, _) => v,
             Frame::Body(..) => panic!("called `Frame::unwrap_msg()` on a `Body` value"),
             Frame::Error(..) => panic!("called `Frame::unwrap_msg()` on an `Error` value"),
             Frame::Done => panic!("called `Frame::unwrap_msg()` on a `Done` value"),
@@ -169,6 +190,7 @@ impl<T, E, B> Frame<T, E, B>
         match self {
             Frame::Body(v) => v,
             Frame::Message(..) => panic!("called `Frame::unwrap_body()` on a `Message` value"),
+            Frame::MessageWithBody(..) => panic!("called `Frame::unwrap_body()` on a `MessageWithBody` value"),
             Frame::Error(..) => panic!("called `Frame::unwrap_body()` on an `Error` value"),
             Frame::Done => panic!("called `Frame::unwrap_body()` on a `Done` value"),
         }
@@ -180,6 +202,7 @@ impl<T, E, B> Frame<T, E, B>
             Frame::Error(e) => e,
             Frame::Body(..) => panic!("called `Frame::unwrap_err()` on a `Body` value"),
             Frame::Message(..) => panic!("called `Frame::unwrap_err()` on a `Message` value"),
+            Frame::MessageWithBody(..) => panic!("called `Frame::unwrap_err()` on a `MessageWithBody` value"),
             Frame::Done => panic!("called `Frame::unwrap_message()` on a `Done` value"),
         }
     }
@@ -195,12 +218,13 @@ impl<T, E, B> Frame<T, E, B>
 
 impl<T, E, B> fmt::Debug for Frame<T, E, B>
     where T: fmt::Debug,
-          E: fmt::Debug,
-          B: fmt::Debug,
+          E: fmt::Debug + Send + 'static,
+          B: fmt::Debug + Send + 'static,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Frame::Message(ref v) => write!(fmt, "Frame::Message({:?})", v),
+            Frame::MessageWithBody(ref v, _) => write!(fmt, "Frame::MessageWithBody({:?}, Sender)", v),
             Frame::Body(ref v) => write!(fmt, "Frame::Body({:?})", v),
             Frame::Error(ref v) => write!(fmt, "Frame::Error({:?})", v),
             Frame::Done => write!(fmt, "Frame::Done"),
@@ -208,8 +232,83 @@ impl<T, E, B> fmt::Debug for Frame<T, E, B>
     }
 }
 
+/*
+ *
+ * ===== impl Message =====
+ *
+ */
+
+impl<T, B> Message<T, B> {
+    /// If the `Message` value has an associated body stream, return it. The
+    /// original `Message` value will then become a `WithoutBody` variant.
+    pub fn take_body(&mut self) -> Option<B> {
+        use std::ptr;
+
+        // unfortunate that this is unsafe, but I think it is preferable to add
+        // a little bit of unsafe code instead of adding a useless variant to
+        // Message.
+        unsafe {
+            match ptr::read(self as *const Message<T, B>) {
+                m @ Message::WithoutBody(..) => {
+                    ptr::write(self as *mut Message<T, B>, m);
+                    None
+                }
+                Message::WithBody(m, b) => {
+                    ptr::write(self as *mut Message<T, B>, Message::WithoutBody(m));
+                    Some(b)
+                }
+            }
+        }
+    }
+}
+
+impl<T, B> cmp::PartialEq<T> for Message<T, B>
+    where T: cmp::PartialEq
+{
+    fn eq(&self, other: &T) -> bool {
+        (**self).eq(other)
+    }
+}
+
+impl<T, B> ops::Deref for Message<T, B> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        match *self {
+            Message::WithoutBody(ref v) => v,
+            Message::WithBody(ref v, _) => v,
+        }
+    }
+}
+
+impl<T, B> ops::DerefMut for Message<T, B> {
+    fn deref_mut(&mut self) -> &mut T {
+        match *self {
+            Message::WithoutBody(ref mut v) => v,
+            Message::WithBody(ref mut v, _) => v,
+        }
+    }
+}
+
+impl<T, B> fmt::Debug for Message<T, B>
+    where T: fmt::Debug
+{
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Message::WithoutBody(ref v) => write!(fmt, "Message::WithoutBody({:?})", v),
+            Message::WithBody(ref v, _) => write!(fmt, "Message::WithBody({:?}, ...)", v),
+        }
+    }
+}
+
+/*
+ *
+ * ===== impl ServerService =====
+ *
+ */
+
 impl<S, Resp, Body, BodyStream> ServerService for S
-    where S: Service<Resp = (Resp, Option<BodyStream>)>,
+    where S: Service<Resp = Message<Resp, BodyStream>>,
           Resp: Send + 'static,
           Body: Send + 'static,
           BodyStream: Stream<Item = Body, Error = S::Error>,
@@ -226,8 +325,14 @@ impl<S, Resp, Body, BodyStream> ServerService for S
     }
 }
 
+/*
+ *
+ * ===== impl Transport =====
+ *
+ */
+
 impl<T, M1, M2, B1, B2, E> Transport for T
-    where T: ::io::Transport<In = Frame<M1, E, B1>, Out = OutFrame<M2, E, B2>>,
+    where T: ::io::Transport<In = Frame<M1, E, B1>, Out = Frame<M2, E, B2>>,
           M1: Send + 'static,
           B1: Send + 'static,
           M2: Send + 'static,
@@ -240,7 +345,7 @@ impl<T, M1, M2, B1, B2, E> Transport for T
     type BodyOut = B2;
     type Error = E;
 
-    fn read(&mut self) -> io::Result<Option<OutFrame<M2, E, B2>>> {
+    fn read(&mut self) -> io::Result<Option<Frame<M2, E, B2>>> {
         ::io::Transport::read(self)
     }
 
@@ -252,6 +357,12 @@ impl<T, M1, M2, B1, B2, E> Transport for T
         ::io::Transport::flush(self)
     }
 }
+
+/*
+ *
+ * ===== impl NewTransport =====
+ *
+ */
 
 impl<F, T> NewTransport for F
     where F: Fn() -> io::Result<T> + Send + 'static,

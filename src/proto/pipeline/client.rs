@@ -1,5 +1,5 @@
 use Service;
-use super::{pipeline, Error, Transport, NewTransport};
+use super::{pipeline, Error, Message, Transport, NewTransport};
 use reactor::{self, ReactorHandle};
 use util::channel::{Receiver};
 use util::future::{self, Complete, Val};
@@ -20,18 +20,15 @@ pub struct ClientHandle<T, B, E>
           B: Stream<Item = T::BodyIn, Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    tx: channel::Sender<(Request<T::In, B>, Complete<T::Out, E>)>,
+    tx: channel::Sender<(Message<T::In, B>, Complete<T::Out, E>)>,
 }
-
-/// An RPC request is a message and an optional body stream
-type Request<T, B> = (T, Option<B>);
 
 struct Dispatch<T, B, E>
     where T: Transport<Error = E>,
           B: Stream<Item = T::BodyIn, Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    requests: Receiver<(Request<T::In, B>, Complete<T::Out, E>)>,
+    requests: Receiver<(Message<T::In, B>, Complete<T::Out, E>)>,
     in_flight: VecDeque<Complete<T::Out, E>>,
 }
 
@@ -72,7 +69,7 @@ impl<T, B, E> Service for ClientHandle<T, B, E>
           B: Stream<Item = T::BodyIn, Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    type Req = (T::In, Option<B>);
+    type Req = Message<T::In, B>;
     type Resp = T::Out;
     type Error = E;
     type Fut = Val<Self::Resp, E>;
@@ -118,7 +115,7 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
         Ok(())
     }
 
-    fn poll(&mut self) -> Option<Result<(Self::InMsg, Option<Self::InBodyStream>), Self::Error>> {
+    fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>> {
         // Try to get a new request frame
         match self.requests.recv() {
             Ok(Some((request, complete))) => {

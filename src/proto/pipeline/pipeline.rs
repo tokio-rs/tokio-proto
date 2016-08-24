@@ -1,4 +1,4 @@
-use super::{Error, Frame, OutFrame, Transport};
+use super::{Error, Frame, Message, Transport};
 use reactor::{Task, Tick};
 use util::future::{Await, AwaitStream, Sender, BusySender};
 use futures::stream::Stream;
@@ -47,7 +47,8 @@ pub trait Dispatch {
     /// Process an out message
     fn dispatch(&mut self, message: Self::OutMsg) -> io::Result<()>;
 
-    fn poll(&mut self) -> Option<Result<(Self::InMsg, Option<Self::InBodyStream>), Self::Error>>;
+    /// Poll the next completed message
+    fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>>;
 
     /// RPC currently in flight
     fn has_in_flight(&self) -> bool;
@@ -77,43 +78,6 @@ impl<S, T, E> Pipeline<S, T>
             is_flushed: true,
             dispatch: dispatch,
         })
-    }
-
-    // Tick the pipeline state machine
-    pub fn tick(&mut self) -> io::Result<Tick> {
-        trace!("Pipeline::tick");
-
-        // Always flush the transport first
-        try!(self.flush());
-
-        // First read off data from the socket
-        try!(self.read_out_frames());
-
-        // Handle completed responses
-        try!(self.write_in_frames());
-
-        // Try flushing buffered writes
-        try!(self.flush());
-
-        // Clean shutdown of the pipeline server can happen when
-        //
-        // 1. The server is done running, this is signaled by Transport::read()
-        //    returning Frame::Done.
-        //
-        // 2. The transport is done writing all data to the socket, this is
-        //    signaled by Transport::flush() returning Ok(Some(())).
-        //
-        // 3. There are no further responses to write to the transport.
-        //
-        // It is necessary to perfom these three checks in order to handle the
-        // case where the client shuts down half the socket.
-        //
-        if self.is_done() {
-            return Ok(Tick::Final);
-        }
-
-        // Tick again later
-        Ok(Tick::WouldBlock)
     }
 
     /// Returns true if the pipeline server dispatch has nothing left to do
@@ -160,16 +124,27 @@ impl<S, T, E> Pipeline<S, T>
         true
     }
 
-    fn process_out_frame(&mut self, frame: OutFrame<T::Out, E, T::BodyOut>) -> io::Result<()> {
+    fn process_out_frame(&mut self, frame: Frame<T::Out, E, T::BodyOut>) -> io::Result<()> {
         // At this point, the service & transport are ready to process the
         // frame, no matter what it is.
         match frame {
-            Frame::Message((out_message, body_sender)) => {
+            Frame::Message(out_message) => {
                 trace!("read out message");
+                // There is no streaming body. Set `out_body` to `None` so that
+                // the previous body stream is dropped.
+                self.out_body = None;
+
+                if let Err(_) = self.dispatch.dispatch(out_message) {
+                    // TODO: Should dispatch be infalliable
+                    unimplemented!();
+                }
+            }
+            Frame::MessageWithBody(out_message, body_sender) => {
+                trace!("read out message with body");
                 // Track the out body sender. If `self.out_body`
                 // currently holds a sender for the previous out body, it
                 // will get dropped. This terminates the stream.
-                self.out_body = body_sender.map(BodySender::Ready);
+                self.out_body = Some(BodySender::Ready(body_sender));
 
                 if let Err(_) = self.dispatch.dispatch(out_message) {
                     // TODO: Should dispatch be infalliable
@@ -253,19 +228,27 @@ impl<S, T, E> Pipeline<S, T>
         Ok(())
     }
 
-    fn write_in_message(&mut self, message: Result<(S::InMsg, Option<S::InBodyStream>), S::Error>) -> io::Result<()> {
+    fn write_in_message(&mut self, message: Result<Message<S::InMsg, S::InBodyStream>, S::Error>) -> io::Result<()> {
         match message {
-            Ok((val, body)) => {
-                trace!("got in_flight value");
+            Ok(Message::WithoutBody(val)) => {
+                trace!("got in_flight value with body");
                 try!(self.transport.write(Frame::Message(val)));
 
                 // TODO: don't panic maybe if this isn't true?
                 assert!(self.in_body.is_none());
 
                 // Track the response body
-                if let Some(body) = body {
-                    self.in_body = Some(try!(AwaitStream::new(body)));
-                }
+                self.in_body = None;
+            }
+            Ok(Message::WithBody(val, body)) => {
+                trace!("got in_flight value with body");
+                try!(self.transport.write(Frame::Message(val)));
+
+                // TODO: don't panic maybe if this isn't true?
+                assert!(self.in_body.is_none());
+
+                // Track the response body
+                self.in_body = Some(try!(AwaitStream::new(body)));
             }
             Err(e) => {
                 trace!("got in_flight error");

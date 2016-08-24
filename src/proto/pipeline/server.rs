@@ -1,4 +1,4 @@
-use super::{pipeline, Error, ServerService, Transport};
+use super::{pipeline, Error, Message, ServerService, Transport};
 use reactor::{Task, Tick};
 use util::future::AwaitQueue;
 use std::io;
@@ -60,7 +60,7 @@ impl<S> pipeline::Dispatch for Dispatch<S>
         Ok(())
     }
 
-    fn poll(&mut self) -> Option<Result<(Self::InMsg, Option<Self::InBodyStream>), Self::Error>> {
+    fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>> {
         self.in_flight.poll()
     }
 

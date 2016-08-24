@@ -21,7 +21,37 @@ pub use self::queue::AwaitQueue;
 pub use self::await::{Await, AwaitStream};
 
 use futures::{Future, Poll, Task};
+use futures::stream::Stream;
+use std::marker::PhantomData;
 use std::sync::Arc;
+
+/// An empty stream
+pub struct Empty<T, E> {
+    marker: PhantomData<(T, E)>,
+}
+
+impl<T, E> Empty<T, E> {
+    /// Create a new `Empty`
+    pub fn new() -> Empty<T, E> {
+        Empty { marker: PhantomData }
+    }
+}
+
+impl<T, E> Stream for Empty<T, E>
+    where T: Send + 'static,
+          E: Send + 'static,
+{
+    type Item = T;
+    type Error = E;
+
+    fn poll(&mut self, _: &mut Task) -> Poll<Option<Self::Item>, Self::Error> {
+        Poll::Ok(None)
+    }
+
+    fn schedule(&mut self, task: &mut Task) {
+        task.notify();
+    }
+}
 
 /// A future representing the cancellation in interest by the consumer of
 /// `Val`.
