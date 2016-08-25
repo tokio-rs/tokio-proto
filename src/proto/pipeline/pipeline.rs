@@ -1,7 +1,6 @@
 use super::{Error, Frame, Message, Transport};
-use reactor::{Task, Tick};
-use util::future::{Await, AwaitStream, Sender, BusySender};
-use futures::stream::Stream;
+use futures::stream::{Stream, Sender, FutureSender};
+use futures::{Future, Poll};
 use std::io;
 
 // TODO:
@@ -22,7 +21,7 @@ pub struct Pipeline<S, T>
     // The `Sender` for the current request body stream
     out_body: Option<BodySender<T::BodyOut, S::Error>>,
     // The response body stream
-    in_body: Option<AwaitStream<S::InBodyStream>>,
+    in_body: Option<S::InBodyStream>,
     // True when the transport is fully flushed
     is_flushed: bool,
     // Glues the service with the pipeline task
@@ -38,7 +37,7 @@ pub trait Dispatch {
     type InBody: Send + 'static;
 
     /// Body stream written to transport
-    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error>;
+    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error> + Send + 'static;
 
     type OutMsg: Send + 'static;
 
@@ -59,7 +58,7 @@ enum BodySender<B, E>
           E: Send + 'static,
 {
     Ready(Sender<B, E>),
-    Busy(Await<BusySender<B, E>>),
+    Busy(FutureSender<B, E>),
 }
 
 impl<S, T, E> Pipeline<S, T>
@@ -104,14 +103,16 @@ impl<S, T, E> Pipeline<S, T>
     fn check_out_body_stream(&mut self) -> bool {
         let sender = match self.out_body {
             Some(BodySender::Ready(..)) => {
+                debug!("ready for a send");
                 // The body sender is ready
                 return true;
             }
             Some(BodySender::Busy(ref mut busy)) => {
+                debug!("waiting to be ready to send again");
                 match busy.poll() {
-                    Some(Ok(sender)) => sender,
-                    Some(Err(_)) => unimplemented!(),
-                    None => {
+                    Poll::Ok(sender) => sender,
+                    Poll::Err(_) => unimplemented!(),
+                    Poll::NotReady => {
                         // Not ready
                         return false;
                     }
@@ -120,11 +121,13 @@ impl<S, T, E> Pipeline<S, T>
             None => return true,
         };
 
+        debug!("reading again for another send");
         self.out_body = Some(BodySender::Ready(sender));
         true
     }
 
     fn process_out_frame(&mut self, frame: Frame<T::Out, E, T::BodyOut>) -> io::Result<()> {
+        trace!("process_out_frame");
         // At this point, the service & transport are ready to process the
         // frame, no matter what it is.
         match frame {
@@ -181,20 +184,24 @@ impl<S, T, E> Pipeline<S, T>
     }
 
     fn process_out_body_chunk(&mut self, chunk: T::BodyOut) -> io::Result<()> {
+        trace!("process_out_body_chunk");
         match self.out_body.take() {
             Some(BodySender::Ready(sender)) => {
+                debug!("sending a chunk");
                 // Try sending the out body chunk
-                let busy = match sender.send(Ok(chunk)) {
-                    Ok(busy) => busy,
-                    Err(_) => {
-                        // The rx half is gone. There is no longer any interest
-                        // in the out body.
-                        return Ok(());
+                let mut busy = sender.send(Ok(chunk));
+                match busy.poll() {
+                    Poll::Ok(s) => {
+                        debug!("immediately done");
+                        self.out_body = Some(BodySender::Ready(s));
+                }
+                    Poll::Err(_e) => {} // interest canceled
+                    Poll::NotReady => {
+                        debug!("not done yet");
+                        self.out_body = Some(BodySender::Busy(busy));
                     }
-                };
-
-                let await = try!(Await::new(busy));
-                self.out_body = Some(BodySender::Busy(await));
+                }
+                debug!("wut");
             }
             Some(BodySender::Busy(..)) => {
                 // This case should never happen but it may be better to fail a
@@ -203,6 +210,7 @@ impl<S, T, E> Pipeline<S, T>
                 unimplemented!();
             }
             None => {
+                debug!("interest canceled");
                 // The rx half canceled interest, there is nothing else to do
             }
         }
@@ -211,11 +219,14 @@ impl<S, T, E> Pipeline<S, T>
     }
 
     fn write_in_frames(&mut self) -> io::Result<()> {
+        trace!("write_in_frames");
         while self.transport.is_writable() {
             // Ensure the current in body is fully written
             if !try!(self.write_in_body()) {
+                debug!("write in body not done");
                 break;
             }
+            debug!("write in body done");
 
             // Write the next in-flight in message
             if let Some(resp) = self.dispatch.poll() {
@@ -229,6 +240,7 @@ impl<S, T, E> Pipeline<S, T>
     }
 
     fn write_in_message(&mut self, message: Result<Message<S::InMsg, S::InBodyStream>, S::Error>) -> io::Result<()> {
+        trace!("write_in_message");
         match message {
             Ok(Message::WithoutBody(val)) => {
                 trace!("got in_flight value with body");
@@ -248,7 +260,7 @@ impl<S, T, E> Pipeline<S, T>
                 assert!(self.in_body.is_none());
 
                 // Track the response body
-                self.in_body = Some(try!(AwaitStream::new(body)));
+                self.in_body = Some(body);
             }
             Err(e) => {
                 trace!("got in_flight error");
@@ -261,21 +273,27 @@ impl<S, T, E> Pipeline<S, T>
 
     // Returns true if the response body is fully written
     fn write_in_body(&mut self) -> io::Result<bool> {
+        trace!("write_in_body");
         if let Some(ref mut body) = self.in_body {
-            match body.poll() {
-                Some(Ok(Some(chunk))) => {
-                    try!(self.transport.write(Frame::Body(Some(chunk))));
-                    return Ok(false);
-                }
-                Some(Ok(None)) => {
-                    try!(self.transport.write(Frame::Body(None)));
-                    // Response body flushed, let fall through
-                }
-                Some(Err(_)) => {
-                    unimplemented!();
-                }
-                None => {
-                    return Ok(false);
+            while self.transport.is_writable() {
+                match body.poll() {
+                    Poll::Ok(Some(chunk)) => {
+                        let r = try!(self.transport.write(Frame::Body(Some(chunk))));
+                        if r.is_none() {
+                            return Ok(false);
+                        }
+                    }
+                    Poll::Ok(None) => {
+                        try!(self.transport.write(Frame::Body(None)));
+                        // Response body flushed, let fall through
+                    }
+                    Poll::Err(_) => {
+                        unimplemented!();
+                    }
+                    Poll::NotReady => {
+                        debug!("not ready");
+                        return Ok(false);
+                    }
                 }
             }
         }
@@ -290,26 +308,37 @@ impl<S, T, E> Pipeline<S, T>
     }
 }
 
-impl<S, T, E> Task for Pipeline<S, T>
+impl<S, T, E> Future for Pipeline<S, T>
     where T: Transport<Error = E>,
           S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
+    type Item = ();
+    type Error = io::Error;
+
     // Tick the pipeline state machine
-    fn tick(&mut self) -> io::Result<Tick> {
+    fn poll(&mut self) -> Poll<(), io::Error> {
         trace!("Pipeline::tick");
 
         // Always flush the transport first
-        try!(self.flush());
+        if let Err(e) = self.flush() {
+            return Poll::Err(e)
+        }
 
         // First read off data from the socket
-        try!(self.read_out_frames());
+        if let Err(e) = self.read_out_frames() {
+            return Poll::Err(e)
+        }
 
         // Handle completed responses
-        try!(self.write_in_frames());
+        if let Err(e) = self.write_in_frames() {
+            return Poll::Err(e)
+        }
 
         // Try flushing buffered writes
-        try!(self.flush());
+        if let Err(e) = self.flush() {
+            return Poll::Err(e)
+        }
 
         // Clean shutdown of the pipeline server can happen when
         //
@@ -325,10 +354,10 @@ impl<S, T, E> Task for Pipeline<S, T>
         // case where the client shuts down half the socket.
         //
         if self.is_done() {
-            return Ok(Tick::Final);
+            return Poll::Ok(())
         }
 
         // Tick again later
-        Ok(Tick::WouldBlock)
+        Poll::NotReady
     }
 }

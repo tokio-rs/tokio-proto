@@ -22,17 +22,18 @@ exclude       = [
 ]
 
 [dependencies]
-log = "0.3.6"
-mio = { git = "https://github.com/carllerche/mio", branch = "dev" }
-slab = { git = "https://github.com/carllerche/slab" }
 bytes = { git = "https://github.com/carllerche/bytes" }
-futures = "0.1.0"
-scoped-tls = "0.1.0"
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
+log = "0.3.6"
+slab = { git = "https://github.com/carllerche/slab" }
 take = "0.1.0"
+tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
+tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 
 [dev-dependencies]
 env_logger = "0.3.0"
 lazycell = { git = "https://github.com/carllerche/lazycell" }
+mio = { git = "https://github.com/carllerche/mio" }
 
 [[test]]
 name = "test"

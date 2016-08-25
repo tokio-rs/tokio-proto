@@ -1,21 +1,24 @@
-use tokio::io::{Ready, Readiness};
-use tokio::reactor::{self, Source};
-use mio::{Evented, EventSet, Poll, PollOpt, Registration, SetReadiness, Token};
-use lazycell::LazyCell;
 use std::{fmt, io};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 
+use futures::{Poll, Future};
+use lazycell::LazyCell;
+use mio::{self, Evented, EventSet, PollOpt, Registration, SetReadiness, Token};
+use tokio::io::Readiness;
+use tokio_core::io::IoFuture;
+use tokio_core::{ReadinessStream, LoopHandle};
+
 pub struct Transport<In, Out> {
     tx: Sender<Write<In>>,
-    io: Io<Out>,
-    source: Source,
+    source: ReadinessStream<Io<Out>>,
     pending: Option<In>,
 }
 
 pub struct NewTransport<In, Out> {
     tx: Sender<Write<In>>,
     inner: Arc<Mutex<Inner<Out>>>,
+    handle: LoopHandle,
 }
 
 pub struct TransportHandle<In, Out> {
@@ -54,7 +57,7 @@ enum Write<T> {
 }
 
 /// Create a new mock transport pair
-pub fn transport<In, Out>() -> (TransportHandle<In, Out>, NewTransport<In, Out>) {
+pub fn transport<In, Out>(handle: LoopHandle) -> (TransportHandle<In, Out>, NewTransport<In, Out>) {
     let (tx, rx) = mpsc::channel();
 
     let inner = Arc::new(Mutex::new(Inner {
@@ -63,13 +66,14 @@ pub fn transport<In, Out>() -> (TransportHandle<In, Out>, NewTransport<In, Out>)
         set_readiness: LazyCell::new(),
     }));
 
-    let handle = TransportHandle {
-        rx: rx,
+    let new_transport = NewTransport {
+        handle: handle,
+        tx: tx,
         inner: inner.clone(),
     };
 
-    let new_transport = NewTransport {
-        tx: tx,
+    let handle = TransportHandle {
+        rx: rx,
         inner: inner,
     };
 
@@ -104,7 +108,7 @@ impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
         match self.rx.recv().unwrap() {
             Write::Write(v) => v,
             Write::Flush => panic!("expected write; actual=Flush"),
-            Write::Drop => panic!("expected flush; actual=Drop"),
+            Write::Drop => panic!("expected write; actual=Drop"),
         }
     }
 
@@ -158,21 +162,11 @@ impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
 
     /// Read a message frame from the `Transport`
     fn read(&mut self) -> io::Result<Option<Out>> {
-        if !self.is_readable() {
-            return Ok(None);
-        }
-
-        match self.io.inner.lock().unwrap().recv() {
-            Some(Ok(v)) => {
-                self.source.advance();
-                Ok(Some(v))
-            }
-            Some(Err(e)) => {
-                self.source.advance();
-                Err(e)
-            }
+        match self.source.get_ref().inner.lock().unwrap().recv() {
+            Some(Ok(v)) => Ok(Some(v)),
+            Some(Err(e)) => Err(e),
             None => {
-                self.source.unset_readable();
+                self.source.need_read();
                 Ok(None)
             }
         }
@@ -191,8 +185,8 @@ impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
     }
 
     fn flush(&mut self) -> io::Result<Option<()>> {
-        if !self.source.is_writable() {
-            return Ok(None);
+        if let Poll::NotReady = self.source.poll_write() {
+            return Ok(None)
         }
 
         if self.pending.is_none() {
@@ -201,7 +195,7 @@ impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
 
         trace!("transport flush");
 
-        let mut inner = self.io.inner.lock().unwrap();
+        let mut inner = self.source.get_ref().inner.lock().unwrap();
 
         while let Some(cap) = shift(&mut inner.write_capability) {
             inner.set_readiness();
@@ -211,13 +205,12 @@ impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
                 WriteCap::Write => {
                     let val = self.pending.take().unwrap();
                     self.tx.send(Write::Write(val)).unwrap();
-                    self.source.advance();
                     return Ok(Some(()));
                 }
             }
         }
 
-        self.source.unset_writable();
+        self.source.need_write();
         Ok(None)
     }
 }
@@ -240,31 +233,41 @@ fn shift<T>(queue: &mut Vec<T>) -> Option<T> {
 impl<In, Out> Readiness for Transport<In, Out> {
 
     fn is_readable(&self) -> bool {
-        self.source.is_readable()
+        match self.source.poll_read() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
     }
 
     fn is_writable(&self) -> bool {
-        self.source.is_writable()
+        match self.source.poll_write() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
     }
 }
 
-impl<In, Out> NewTransport<In, Out> {
-    pub fn new_transport(self) -> io::Result<Transport<In, Out>> {
-        let NewTransport { tx, inner } = self;
+impl<In, Out> NewTransport<In, Out>
+    where In: Send + 'static,
+          Out: Send + 'static,
+{
+    pub fn new_transport(self) -> IoFuture<Transport<In, Out>> {
+        let NewTransport { tx, inner, handle } = self;
 
         let io = Io {
             registration: LazyCell::new(),
             inner: inner,
         };
 
-        let source = reactor::register_source(&io, Ready::all()).unwrap();
+        let source = ReadinessStream::new(handle, io);
 
-        Ok(Transport {
-            tx: tx,
-            io: io,
-            source: source,
-            pending: None,
-        })
+        source.map(|source| {
+            Transport {
+                tx: tx,
+                source: source,
+                pending: None,
+            }
+        }).boxed()
     }
 }
 
@@ -311,7 +314,7 @@ impl<Out> Inner<Out> {
 
 
 impl<T> Evented for Io<T> {
-    fn register(&self, poll: &Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
+    fn register(&self, poll: &mio::Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
         if self.registration.filled() {
             return Err(io::Error::new(io::ErrorKind::Other, "already registered"));
         }
@@ -327,14 +330,14 @@ impl<T> Evented for Io<T> {
         Ok(())
     }
 
-    fn reregister(&self, poll: &Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
+    fn reregister(&self, poll: &mio::Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
         match self.registration.borrow() {
             Some(registration) => registration.update(poll, token, interest, opts),
             None => Err(io::Error::new(io::ErrorKind::Other, "receiver not registered")),
         }
     }
 
-    fn deregister(&self, poll: &Poll) -> io::Result<()> {
+    fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
         match self.registration.borrow() {
             Some(registration) => registration.deregister(poll),
             None => Err(io::Error::new(io::ErrorKind::Other, "receiver not registered")),

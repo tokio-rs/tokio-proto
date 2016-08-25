@@ -1,12 +1,13 @@
-use support::{self, mock};
-use tokio;
-use tokio::proto::pipeline::{self, Frame, Message};
-use tokio::reactor::{self, Reactor};
-use tokio::util::future::{self, Receiver};
-use futures::{Future, failed, finished};
-use futures::stream::Stream;
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
+
+use futures::stream::{self, Stream, Receiver};
+use futures::{Future, failed, finished, oneshot};
+use support::{self, mock};
+use tokio::proto::pipeline::{self, Frame, Message};
+use tokio;
+use tokio_core::Loop;
 
 // The message type is a static string for both the request and response
 type Msg = &'static str;
@@ -49,12 +50,12 @@ fn test_immediate_writable_echo() {
 
 #[test]
 fn test_immediate_writable_delayed_response_echo() {
-    let (c, fut) = future::pair();
+    let (c, fut) = oneshot();
     let fut = Mutex::new(Some(fut));
 
     let service = tokio::simple_service(move |req| {
         assert_eq!(req, "hello");
-        fut.lock().unwrap().take().unwrap()
+        fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
 
     run(service, |mock| {
@@ -62,7 +63,7 @@ fn test_immediate_writable_delayed_response_echo() {
         mock.send(msg("hello"));
 
         support::sleep_ms(20);
-        c.complete(Message::WithoutBody("goodbye"));
+        c.complete(Ok(Message::WithoutBody("goodbye")));
 
         assert_eq!(mock.next_write().unwrap_msg(), "goodbye");
 
@@ -93,9 +94,9 @@ fn test_pipelining_while_service_is_processing() {
     let (tx, rx) = channel();
 
     let service = tokio::simple_service(move |_| {
-        let (c, fut) = future::pair();
+        let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
-        fut
+        fut.then(|r| r.unwrap())
     });
 
     run(service, |mock| {
@@ -112,13 +113,13 @@ fn test_pipelining_while_service_is_processing() {
         let c3 = rx.recv().unwrap();
 
         mock.assert_no_write(20);
-        c3.complete(Message::WithoutBody("three"));
+        c3.complete(Ok(Message::WithoutBody("three")));
 
         mock.assert_no_write(20);
-        c2.complete(Message::WithoutBody("two"));
+        c2.complete(Ok(Message::WithoutBody("two")));
 
         mock.assert_no_write(20);
-        c1.complete(Message::WithoutBody("one"));
+        c1.complete(Ok(Message::WithoutBody("one")));
 
         assert_eq!("one", mock.next_write().unwrap_msg());
         assert_eq!("two", mock.next_write().unwrap_msg());
@@ -314,6 +315,7 @@ fn test_pipeline_streaming_body_without_consuming() {
         let body = req.take_body().unwrap();
 
         if req == "one" {
+            debug!("drop body");
             finished(Message::WithoutBody("resp-one")).boxed()
         } else {
             let tx = tx.clone();
@@ -340,10 +342,13 @@ fn test_pipeline_streaming_body_without_consuming() {
         assert_eq!(mock.next_write().unwrap_msg(), "resp-one");
 
         // Send the next request
+        println!("sending two");
         mock.send(msg_with_body("two"));
 
         for i in 0..5 {
+            println!("sendering: {}", i);
             mock.send(Frame::Body(Some(i)));
+            println!("waiting");
             assert_eq!(i, rx.recv().unwrap());
         }
 
@@ -364,7 +369,7 @@ fn test_transport_error_during_body_stream() {
 
 #[test]
 fn test_streaming_response_body() {
-    let (tx, rx) = future::channel::<u32, io::Error>();
+    let (tx, rx) = stream::channel::<u32, io::Error>();
     let rx = Mutex::new(Some(rx));
 
     let service = tokio::simple_service(move |req| {
@@ -381,10 +386,10 @@ fn test_streaming_response_body() {
         mock.assert_no_write(20);
 
         mock.allow_write();
-        let tx = support::await(tx.send(Ok(1)).unwrap()).unwrap();
+        let tx = tx.send(Ok(1)).wait().ok().unwrap();
         assert_eq!(Some(1), mock.next_write().unwrap_body());
 
-        let _ = support::await(tx.send(Ok(2)).unwrap());
+        let _ = tx.send(Ok(2)).wait().ok().unwrap();
         mock.assert_no_write(20);
         mock.allow_write();
         assert_eq!(Some(2), mock.next_write().unwrap_body());
@@ -408,7 +413,7 @@ fn msg(msg: Msg) -> OutFrame {
 }
 
 fn msg_with_body(msg: Msg) -> OutFrame {
-    let (tx, rx) = future::channel();
+    let (tx, rx) = stream::channel();
     Frame::MessageWithBody(Message::WithBody(msg, rx), tx)
 }
 
@@ -418,26 +423,24 @@ fn run<S, F>(service: S, f: F)
     where S: pipeline::ServerService<Req = pipeline::Message<Msg, Body>, Resp = Msg, Body = u32, BodyStream = Body, Error = io::Error>,
           F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),
 {
-    let _ = ::env_logger::init();
-    let r = Reactor::default().unwrap();
-    let h = r.handle();
-
-    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>();
-
-    // Spawn the reactor
-    r.spawn();
-
-    h.oneshot(move || {
-        let transport = try!(new_transport.new_transport());
-        let dispatch = try!(pipeline::Server::new(service, transport));
-
-        try!(reactor::schedule(dispatch));
-
-        Ok(())
+    drop(::env_logger::init());
+    let (tx, rx) = oneshot();
+    let (tx2, rx2) = mpsc::channel();
+    let t = thread::spawn(move || {
+        let mut lp = Loop::new().unwrap();
+        tx2.send(lp.handle()).unwrap();
+        lp.run(rx)
     });
+    let handle = rx2.recv().unwrap();
+
+    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle);
+
+    let transport = new_transport.new_transport().wait().unwrap();
+    let dispatch = pipeline::Server::new(service, transport).unwrap();
+    dispatch.forget();
 
     f(mock);
 
-
-    h.shutdown();
+    tx.complete(());
+    t.join().unwrap().unwrap();
 }
