@@ -1,41 +1,23 @@
+extern crate futures;
 extern crate tokio;
+extern crate tokio_core;
 
-use tokio::reactor::{Tick, Task, Reactor, schedule};
-use tokio::tcp::TcpListener;
-
-struct Listener {
-    socket: TcpListener,
-}
-
-impl Task for Listener {
-    fn tick(&mut self) -> std::io::Result<Tick> {
-        // As long as there are sockets to accept, accept and process them
-        while let Some(socket) = try!(self.socket.accept()) {
-            // Do something with the socket
-            println!("{:#?}", socket);
-        }
-
-        Ok(Tick::WouldBlock)
-    }
-}
+use futures::Future;
+use futures::stream::Stream;
+use tokio_core::Loop;
 
 pub fn main() {
-    let reactor = Reactor::default().unwrap();
+    let mut lp = Loop::new().unwrap();
 
-    // Run a closure on the reactor
-    reactor.handle().oneshot(|| {
-        let addr = "0.0.0.0:4000".parse().unwrap();
-        let listener = try!(TcpListener::bind(&addr));
-
-        // Schedule the task managing the listener
-        schedule(Listener { socket: listener })
-            .unwrap();
-
-        Ok(())
+    let addr = "0.0.0.0:4000".parse().unwrap();
+    let listener = lp.handle().tcp_listen(&addr);
+    let srv = listener.and_then(|l| {
+        l.incoming().for_each(|socket| {
+            // Do something with the socket
+            println!("{:#?}", socket);
+            Ok(())
+        })
     });
 
-    println!("Listening on port 4000. Curl me!");
-
-    reactor.run()
-        .unwrap();
+    lp.run(srv).unwrap();
 }

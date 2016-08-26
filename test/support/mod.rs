@@ -1,8 +1,4 @@
-mod futures;
-
 pub mod mock;
-
-pub use self::futures::await;
 
 use std::time::Duration;
 

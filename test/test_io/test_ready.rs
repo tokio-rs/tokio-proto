@@ -1,5 +1,4 @@
 use tokio::io::Ready;
-use mio::EventSet;
 
 #[test]
 fn test_no_readiness() {
@@ -50,46 +49,4 @@ fn test_ready_bitwise_ops() {
     assert_eq!(Ready::none(), Ready::readable() & Ready::writable());
     assert_eq!(Ready::all(), Ready::readable() ^ Ready::writable());
     assert_eq!(Ready::none(), Ready::readable() ^ Ready::readable());
-}
-
-#[test]
-fn test_from_event_set() {
-    let ready = Ready::from(EventSet::none());
-    assert!(!ready.is_readable());
-    assert!(!ready.is_writable());
-
-    let ready = Ready::from(EventSet::error());
-    assert!(!ready.is_readable());
-    assert!(!ready.is_writable());
-
-    let ready = Ready::from(EventSet::hup());
-    assert!(!ready.is_readable());
-    assert!(!ready.is_writable());
-
-    let ready = Ready::from(EventSet::readable());
-    assert!(ready.is_readable());
-    assert!(!ready.is_writable());
-
-    let ready = Ready::from(EventSet::writable());
-    assert!(!ready.is_readable());
-    assert!(ready.is_writable());
-
-    let ready = Ready::from(EventSet::all());
-    assert!(ready.is_readable());
-    assert!(ready.is_writable());
-}
-
-#[test]
-fn test_into_event_set() {
-    let event_set: EventSet = Ready::readable().into();
-    assert!(event_set.is_readable());
-    assert!(!event_set.is_writable());
-    assert!(!event_set.is_error());
-    assert!(!event_set.is_hup());
-
-    let event_set: EventSet = Ready::writable().into();
-    assert!(!event_set.is_readable());
-    assert!(event_set.is_writable());
-    assert!(!event_set.is_error());
-    assert!(!event_set.is_hup());
 }

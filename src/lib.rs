@@ -27,25 +27,19 @@
 
 #![deny(warnings, missing_docs)]
 
-extern crate mio;
-extern crate slab;
-extern crate futures;
-extern crate take;
 extern crate bytes;
-
-#[macro_use]
-extern crate scoped_tls;
+extern crate futures;
+extern crate slab;
+extern crate take;
+extern crate tokio_core;
+extern crate tokio_service;
 
 #[macro_use]
 extern crate log;
 
 pub mod io;
 pub mod proto;
-pub mod reactor;
 pub mod server;
-pub mod tcp;
-pub mod udp;
-pub mod util;
 
 mod service;
 

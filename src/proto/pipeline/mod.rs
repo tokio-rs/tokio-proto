@@ -33,9 +33,8 @@ pub use self::server::Server;
 
 use Service;
 use io::{Readiness};
-use util::future::{Empty, Sender};
 use futures::Future;
-use futures::stream::Stream;
+use futures::stream::{Stream, Sender};
 use take::Take;
 use std::{cmp, fmt, io, ops};
 
@@ -60,7 +59,7 @@ pub enum Frame<T, E, B = ()>
 }
 
 /// Message sent and received from a pipeline service
-pub enum Message<T, B = Empty<(), ()>> {
+pub enum Message<T, B> {
     /// Has no associated streaming body
     WithoutBody(T),
     /// Has associated streaming body
@@ -91,13 +90,13 @@ pub trait ServerService: Send + 'static {
     type Body: Send + 'static;
 
     /// Response body stream
-    type BodyStream: Stream<Item = Self::Body, Error = Self::Error>;
+    type BodyStream: Stream<Item = Self::Body, Error = Self::Error> + Send + 'static;
 
     /// Errors produced by the service.
     type Error: Send + 'static;
 
     /// The future response value.
-    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error>;
+    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error> + Send + 'static;
 
     /// Process the request and return the response asynchronously.
     fn call(&self, req: Self::Req) -> Self::Fut;
@@ -311,7 +310,7 @@ impl<S, Resp, Body, BodyStream> ServerService for S
     where S: Service<Resp = Message<Resp, BodyStream>>,
           Resp: Send + 'static,
           Body: Send + 'static,
-          BodyStream: Stream<Item = Body, Error = S::Error>,
+          BodyStream: Stream<Item = Body, Error = S::Error> + Send + 'static,
 {
     type Req = S::Req;
     type Resp = Resp;

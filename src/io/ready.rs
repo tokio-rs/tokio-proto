@@ -1,5 +1,7 @@
-use mio::EventSet;
 use std::{fmt, ops};
+
+use futures::Poll;
+use tokio_core::{TcpStream, UdpSocket};
 
 /// A Tokio aware source.
 ///
@@ -58,28 +60,6 @@ impl Ready {
     /// Returns true when the specified readiness is included
     pub fn contains(&self, other: Ready) -> bool {
         (*self & other) == other
-    }
-}
-
-impl From<EventSet> for Ready {
-    fn from(src: EventSet) -> Ready {
-        let mut ret = Ready::none();
-
-        if src.is_readable() { ret = ret | Ready::readable() }
-        if src.is_writable() { ret = ret | Ready::writable() }
-
-        ret
-    }
-}
-
-impl Into<EventSet> for Ready {
-    fn into(self) -> EventSet {
-        let mut ret = EventSet::none();
-
-        if self.is_readable() { ret = ret | EventSet::readable() }
-        if self.is_writable() { ret = ret | EventSet::writable() }
-
-        ret
     }
 }
 
@@ -150,5 +130,37 @@ impl fmt::Debug for Ready {
         try!(write!(fmt, "}}"));
 
         Ok(())
+    }
+}
+
+impl Readiness for TcpStream {
+    fn is_readable(&self) -> bool {
+        match self.poll_read() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
+    }
+
+    fn is_writable(&self) -> bool {
+        match self.poll_write() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Readiness for UdpSocket {
+    fn is_readable(&self) -> bool {
+        match self.poll_read() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
+    }
+
+    fn is_writable(&self) -> bool {
+        match self.poll_write() {
+            Poll::Ok(()) => true,
+            _ => false,
+        }
     }
 }

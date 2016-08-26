@@ -1,28 +1,23 @@
 //! A generic Tokio TCP server implementation.
 
-use tcp::{TcpListener, TcpStream};
-use reactor::{self, ReactorHandle, Task, Tick};
-use mio::tcp as mio;
-use take::Take;
 use std::io;
 use std::net::SocketAddr;
+
+use futures::stream::Stream;
+use futures::{self, Future};
+use take::Take;
+use tokio_core::io::IoFuture;
+use tokio_core::{TcpStream, LoopHandle};
 
 /// A handle to a running server.
 pub struct ServerHandle {
     local_addr: SocketAddr,
 }
 
-struct Listener<T> {
-    socket: TcpListener,
-    new_task: T,
-}
-
-
-
 /// Create a new `Task` to handle a server socket.
 pub trait NewTask: Send + 'static {
     /// The `Task` value created by this factory
-    type Item: Task;
+    type Item: Future<Item=(), Error=io::Error> + 'static;
 
     /// Create and return a new `Task` value
     fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item>;
@@ -32,16 +27,21 @@ pub trait NewTask: Send + 'static {
 /// connections; dispatching them to tasks created by `new_task`.
 ///
 /// ```rust,no_run
+/// extern crate futures;
+/// extern crate tokio;
+/// #[macro_use]
+/// extern crate tokio_core;
+///
+/// use std::io::{self, Read};
+///
+/// use futures::{Future, Poll};
 /// use tokio::server;
-/// use tokio::io::TryRead;
-/// use tokio::tcp::TcpStream;
-/// use tokio::reactor::*;
-/// use std::io;
+/// use tokio_core::{Loop, TcpStream};
 ///
 /// struct Connection {
 ///     stream: TcpStream,
 ///     buf: Box<[u8]>,
-/// };
+/// }
 ///
 /// impl Connection {
 ///     fn new(stream: TcpStream) -> Connection {
@@ -54,58 +54,61 @@ pub trait NewTask: Send + 'static {
 ///     }
 /// }
 ///
-/// impl Task for Connection {
-///     fn tick(&mut self) -> io::Result<Tick> {
-///         while let Some(n) = try!(self.stream.try_read(&mut self.buf)) {
+/// impl Future for Connection {
+///     type Item = ();
+///     type Error = io::Error;
+///
+///     fn poll(&mut self) -> Poll<(), io::Error> {
+///         loop {
+///             let n = try_nb!(self.stream.read(&mut self.buf));
 ///             println!("read {} bytes", n);
 ///
 ///             if n == 0 {
 ///                 // Socket closed, shutdown
-///                 return Ok(Tick::Final);
+///                 return Poll::Ok(())
 ///             }
 ///         }
 ///
-///         Ok(Tick::WouldBlock)
+///         Poll::NotReady
 ///     }
 /// }
 ///
-/// let reactor = Reactor::default().unwrap();
+/// fn main() {
+///     let mut lp = Loop::new().unwrap();
 ///
-/// // Launch the server
-/// server::listen(&reactor.handle(),
-///                "0.0.0.0:3245".parse().unwrap(),
-///                |stream| Ok(Connection::new(stream)));
+///     // Launch the server
+///     server::listen(lp.handle(),
+///                    "0.0.0.0:3245".parse().unwrap(),
+///                    |stream| Ok(Connection::new(stream)));
 ///
-/// // Run the reactor
-/// reactor.run().unwrap();
-///
+///     // Run the reactor
+///     lp.run(futures::empty::<(), ()>()).unwrap();
+/// }
 /// ```
-pub fn listen<T>(reactor: &ReactorHandle, addr: SocketAddr, new_task: T) -> io::Result<ServerHandle>
-        where T: NewTask
+pub fn listen<T>(handle: LoopHandle,
+                 addr: SocketAddr,
+                 new_task: T) -> IoFuture<ServerHandle>
+    where T: NewTask
 {
-
-    let socket = try!(mio::TcpListener::bind(&addr));
-    let addr = try!(socket.local_addr());
-
-    reactor.oneshot(move || {
-        trace!("executing oneshot");
-        // Create a new Tokio TcpListener from the Mio socket
-        let socket = match TcpListener::watch(socket) {
-            Ok(s) => s,
-            Err(_) => unimplemented!(),
-        };
-
-        // Initialize the new listener
-        let listener = Listener::new(socket, new_task);
-
-        // Register the listener with the Reactor
-        try!(reactor::schedule(listener));
-        Ok(())
+    let new_task = handle.add_loop_data(|p| {
+        futures::finished::<_, io::Error>((new_task, p.clone()))
     });
+    let listener = handle.clone().tcp_listen(&addr);
+    listener.join(new_task).and_then(move |(socket, new_task)| {
+        let addr = try!(socket.local_addr());
 
-    Ok(ServerHandle {
-        local_addr: addr,
-    })
+        new_task.and_then(|(new_task, p)| {
+            let p2 = p.clone();
+            let res = socket.incoming().for_each(move |(socket, _)| {
+                let task = new_task.new_task(socket);
+                p2.add_loop_data(futures::done(task).flatten()).forget();
+                Ok(())
+            });
+            p.add_loop_data(res)
+        }).forget();
+
+        Ok(ServerHandle { local_addr: addr })
+    }).boxed()
 }
 
 impl ServerHandle {
@@ -115,35 +118,9 @@ impl ServerHandle {
     }
 }
 
-impl<T> Listener<T> {
-    fn new(socket: TcpListener, new_task: T) -> Listener<T> {
-        Listener {
-            socket: socket,
-            new_task: new_task,
-        }
-    }
-}
-
-impl<T: NewTask> Task for Listener<T> {
-    fn tick(&mut self) -> io::Result<Tick> {
-        debug!("listener task ticked");
-
-        // As long as there are sockets to accept, accept and process them
-        while let Some(socket) = try!(self.socket.accept()) {
-            trace!("accepted new TCP connection");
-            let socket = try!(TcpStream::watch(socket));
-            let task = try!(self.new_task.new_task(socket));
-
-            try!(reactor::schedule(task));
-        }
-
-        Ok(Tick::WouldBlock)
-    }
-}
-
 impl<T, U> NewTask for T
     where T: Fn(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Task,
+          U: Future<Item=(), Error=io::Error> + 'static,
 {
     type Item = U;
 
@@ -154,7 +131,7 @@ impl<T, U> NewTask for T
 
 impl<T, U> NewTask for Take<T>
     where T: FnOnce(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Task,
+          U: Future<Item=(), Error=io::Error> + 'static,
 {
     type Item = U;
 
