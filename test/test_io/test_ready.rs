@@ -1,4 +1,4 @@
-use tokio::io::Ready;
+use tokio_proto::io::Ready;
 
 #[test]
 fn test_no_readiness() {

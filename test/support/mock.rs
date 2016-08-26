@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use futures::{Poll, Future};
 use lazycell::LazyCell;
 use mio::{self, Evented, EventSet, PollOpt, Registration, SetReadiness, Token};
-use tokio::io::Readiness;
+use tokio_proto::io::Readiness;
 use tokio_core::io::IoFuture;
 use tokio_core::{ReadinessStream, LoopHandle};
 
@@ -154,7 +154,7 @@ impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
     }
 }
 
-impl<In, Out> ::tokio::io::Transport for Transport<In, Out>
+impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
     where In: fmt::Debug,
 {
     type In = In;

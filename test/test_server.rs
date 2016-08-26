@@ -4,7 +4,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use futures::{oneshot, Future, Poll};
-use tokio::server;
+use tokio_proto::server;
 use tokio_core::Loop;
 
 use support;

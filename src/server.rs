@@ -28,14 +28,14 @@ pub trait NewTask: Send + 'static {
 ///
 /// ```rust,no_run
 /// extern crate futures;
-/// extern crate tokio;
+/// extern crate tokio_proto;
 /// #[macro_use]
 /// extern crate tokio_core;
 ///
 /// use std::io::{self, Read};
 ///
 /// use futures::{Future, Poll};
-/// use tokio::server;
+/// use tokio_proto::server;
 /// use tokio_core::{Loop, TcpStream};
 ///
 /// struct Connection {

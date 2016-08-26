@@ -1,6 +1,6 @@
 [package]
 
-name          = "tokio"
+name          = "tokio-proto"
 version       = "0.1.0"
 license       = "MIT/Apache-2.0"
 authors       = ["Carl Lerche <me@carllerche.com>"]
@@ -10,8 +10,8 @@ production deployments of clients and servers.
 """
 
 documentation = "http://rust-doc.s3-website-us-east-1.amazonaws.com/tokio/master/tokio"
-homepage      = "https://github.com/tokio-rs/tokio"
-repository    = "https://github.com/tokio-rs/tokio"
+homepage      = "https://github.com/tokio-rs/tokio-proto"
+repository    = "https://github.com/tokio-rs/tokio-proto"
 readme        = "README.md"
 keywords      = [ "io", "async", "non-blocking", "futures" ]
 exclude       = [

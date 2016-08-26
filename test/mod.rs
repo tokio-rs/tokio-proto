@@ -3,7 +3,7 @@ extern crate futures;
 extern crate lazycell;
 extern crate mio;
 extern crate take;
-extern crate tokio;
+extern crate tokio_proto;
 extern crate tokio_core;
 
 #[macro_use]

@@ -1,4 +1,4 @@
-# Tokio
+# tokio-proto
 
 Tokio is a network application framework for rapid development and
 highly scalable production deployments of clients and servers.

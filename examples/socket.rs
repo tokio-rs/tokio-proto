@@ -1,5 +1,5 @@
 extern crate futures;
-extern crate tokio;
+extern crate tokio_proto;
 extern crate tokio_core;
 
 use futures::Future;

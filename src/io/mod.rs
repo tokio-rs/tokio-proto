@@ -37,7 +37,7 @@
 //! something like:
 //!
 //! ```rust,no_run
-//! use tokio::io::{TryRead, TryWrite, Readiness, Transport};
+//! use tokio_proto::io::{TryRead, TryWrite, Readiness, Transport};
 //! use std::io;
 //!
 //! struct LineTransport<T> {
