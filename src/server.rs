@@ -88,6 +88,7 @@ pub fn listen<T>(reactor: &ReactorHandle, addr: SocketAddr, new_task: T) -> io::
     let addr = try!(socket.local_addr());
 
     reactor.oneshot(move || {
+        trace!("executing oneshot");
         // Create a new Tokio TcpListener from the Mio socket
         let socket = match TcpListener::watch(socket) {
             Ok(s) => s,

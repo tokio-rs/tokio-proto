@@ -458,6 +458,8 @@ impl EventLoop {
             Err(_) => unimplemented!(),
         };
 
+        trace!("added new task; token={:?}", token);
+
         self.execute_task(token);
     }
 
@@ -468,6 +470,7 @@ impl EventLoop {
             let tasks = &mut self.tasks;
 
             self.rt.scope(None, || {
+                trace!("dropping task; token={:?}", token);
                 // Drop the task within an RT scope
                 // TODO: Should the current task info be set?
                 let _ = tasks.remove(token);
@@ -526,7 +529,9 @@ impl<T: Task> TaskHarness for TaskCell<T> {
 
                     trace!("current task made progress");
                 }
-                Err(_) => {
+                Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => return Tick::WouldBlock,
+                Err(e) => {
+                    warn!("task returned with error; e={:?}", e);
                     // Task returned an error, in this case it has to be
                     // cleaned up
                     return Tick::Final;

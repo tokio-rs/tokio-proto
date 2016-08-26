@@ -14,3 +14,4 @@ mod support;
 mod test_proto;
 mod test_reactor;
 mod test_io;
+mod test_server;
