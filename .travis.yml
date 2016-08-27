@@ -28,6 +28,6 @@ deploy:
   acl: public_read
   on:
     condition: $TRAVIS_RUST_VERSION == "1.10.0" && $TRAVIS_OS_NAME == "linux"
-    repo: tokio-rs/tokio
+    repo: tokio-rs/tokio-proto
     branch:
       - master
