@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Sender, Receiver};
 
 use futures::{Poll, Future};
 use lazycell::LazyCell;
-use mio::{self, Evented, EventSet, PollOpt, Registration, SetReadiness, Token};
+use mio::{self, Evented, Ready, PollOpt, Registration, SetReadiness, Token};
 use tokio_proto::io::Readiness;
 use tokio_core::io::IoFuture;
 use tokio_core::{ReadinessStream, LoopHandle};
@@ -291,14 +291,14 @@ impl<Out> Inner<Out> {
 
     fn set_readiness(&self) {
         if let Some(h) = self.set_readiness.borrow() {
-            let mut readiness = EventSet::none();
+            let mut readiness = Ready::none();
 
             if self.read_buffer.len() > 0 {
-                readiness = readiness | EventSet::readable();
+                readiness = readiness | Ready::readable();
             }
 
             if self.write_capability.len() > 0 {
-                readiness = readiness | EventSet::writable();
+                readiness = readiness | Ready::writable();
             }
 
             let orig = h.readiness();
@@ -314,7 +314,7 @@ impl<Out> Inner<Out> {
 
 
 impl<T> Evented for Io<T> {
-    fn register(&self, poll: &mio::Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
+    fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
         if self.registration.filled() {
             return Err(io::Error::new(io::ErrorKind::Other, "already registered"));
         }
@@ -330,7 +330,7 @@ impl<T> Evented for Io<T> {
         Ok(())
     }
 
-    fn reregister(&self, poll: &mio::Poll, token: Token, interest: EventSet, opts: PollOpt) -> io::Result<()> {
+    fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
         match self.registration.borrow() {
             Some(registration) => registration.update(poll, token, interest, opts),
             None => Err(io::Error::new(io::ErrorKind::Other, "receiver not registered")),
