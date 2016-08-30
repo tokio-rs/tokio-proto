@@ -9,10 +9,6 @@ use Service;
 use super::{pipeline, Error, Message, Transport, NewTransport};
 
 /// Client `Service` for the pipeline protocol.
-///
-/// Initiated requests are sent to the client pipeline task running on the
-/// Reactor where they are processed. The response is returned by completing
-/// the future.
 pub struct Client<Req, Resp, ReqBody, E>
     where Req: Send + 'static,
           Resp: Send + 'static,

@@ -11,15 +11,6 @@
 //!
 //! The service trait is decoupled from any notion of a runtime.
 //!
-//! # Reactor
-//!
-//! The Tokio Reactor is a lightweight, event driven, task scheduler. It
-//! accepts tasks, which are small units of work and schedules them for
-//! execution when their dependent I/O sources (TCP sockets, timers, etc...)
-//! are ready.
-//!
-//! The reactor and task exist in the `reactor` module.
-//!
 //! # Protocol building blocks
 //!
 //! Tokio aims to provide all the pieces necessary for rapidly developing

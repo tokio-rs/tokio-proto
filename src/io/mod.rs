@@ -10,10 +10,6 @@
 //! internal buffer has pending bytes. The same socket is ready to perform a
 //! write when its write buffer is not full.
 //!
-//! The `Readiness` trait represents this concept. The `Readiness` trait also
-//! acts as a marker trait to denotate types which are *Tokio aware*. A Tokio
-//! aware type is able to observe usage and signal interest to the `Reactor`.
-//!
 //! In the case of `TcpStream`, the Tokio aware TCP socket, when
 //! `TcpStream::try_read` is called and `Ok(None)` is returned, read interest
 //! is automatically registered with the reactor and associated with the
