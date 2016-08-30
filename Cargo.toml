@@ -32,7 +32,7 @@ tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 
 [dev-dependencies]
 env_logger = "0.3.0"
-lazycell = { git = "https://github.com/carllerche/lazycell" }
+lazycell = "0.4.0"
 mio = { git = "https://github.com/carllerche/mio" }
 
 [[test]]
