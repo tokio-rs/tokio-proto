@@ -4,7 +4,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use futures::stream::Stream;
-use futures::{self, Future};
+use futures::Future;
 use take::Take;
 use tokio_core::io::IoFuture;
 use tokio_core::{TcpStream, LoopHandle};
@@ -90,22 +90,24 @@ pub fn listen<T>(handle: LoopHandle,
                  new_task: T) -> IoFuture<ServerHandle>
     where T: NewTask
 {
-    let new_task = handle.add_loop_data(|p| {
-        futures::finished::<_, io::Error>((new_task, p.clone()))
-    });
     let listener = handle.clone().tcp_listen(&addr);
-    listener.join(new_task).and_then(move |(socket, new_task)| {
+    listener.and_then(move |socket| {
         let addr = try!(socket.local_addr());
 
-        new_task.and_then(|(new_task, p)| {
-            let p2 = p.clone();
-            let res = socket.incoming().for_each(move |(socket, _)| {
-                let task = new_task.new_task(socket);
-                p2.add_loop_data(futures::done(task).flatten()).forget();
+        handle.spawn(|pin| {
+            let pin = pin.clone();
+            socket.incoming().for_each(move |(socket, _)| {
+                let task = try!(new_task.new_task(socket));
+                // TODO: where to punt this error to?
+                pin.spawn(task.map_err(|e| {
+                    error!("task error: {}", e);
+                }));
                 Ok(())
-            });
-            p.add_loop_data(res)
-        }).forget();
+            }).map_err(|e| {
+                // TODO: where to punt this error to?
+                error!("server error: {}", e);
+            })
+        });
 
         Ok(ServerHandle { local_addr: addr })
     }).boxed()

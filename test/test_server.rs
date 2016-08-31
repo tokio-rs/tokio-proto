@@ -34,7 +34,7 @@ fn test_accepting_multiple_sockets() {
     let address: SocketAddr = "127.0.0.1:14564".parse().unwrap();
 
     let (handle, tx) = rx.recv().unwrap();
-    server::listen(handle, address.clone(), |_| Ok(Connection)).forget();
+    server::listen(handle, address.clone(), |_| Ok(Connection)).wait().unwrap();
 
     let _ = TcpStream::connect(&address).unwrap();
 

@@ -279,11 +279,14 @@ fn test_responding_then_streaming_request_body() {
         let body = req.take_body().unwrap();
         let tx = tx.clone();
 
-        body.for_each(move |chunk| {
-                tx.lock().unwrap().send(chunk).unwrap();
-                Ok(())
-            })
-            .forget();
+        thread::spawn(|| {
+            body.for_each(move |chunk| {
+                    tx.lock().unwrap().send(chunk).unwrap();
+                    Ok(())
+                })
+                .wait()
+                .unwrap();
+        });
 
         finished(Message::WithoutBody("hi2u"))
     });
@@ -433,11 +436,13 @@ fn run<S, F>(service: S, f: F)
     });
     let handle = rx2.recv().unwrap();
 
-    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle);
+    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
 
     let transport = new_transport.new_transport().wait().unwrap();
     let dispatch = pipeline::Server::new(service, transport).unwrap();
-    dispatch.forget();
+    handle.spawn(|_| {
+        dispatch.map_err(|e| error!("error: {}", e))
+    });
 
     f(mock);
 

@@ -36,7 +36,7 @@ pub fn connect<T, B, E>(handle: LoopHandle, new_transport: T)
 {
     let (tx, rx) = handle.clone().channel();
 
-    handle.add_loop_data(|_| {
+    handle.spawn(|_| {
         rx.and_then(move |rx| {
             // Create the transport
             let transport = try!(new_transport.new_transport());
@@ -50,8 +50,11 @@ pub fn connect<T, B, E>(handle: LoopHandle, new_transport: T)
             // Create the pipeline with the dispatch and transport
             let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
             Ok(pipeline)
-        }).flatten()
-    }).flatten().forget();
+        }).flatten().map_err(|e| {
+            // TODO: where to punt this error to?
+            error!("pipeline error: {}", e)
+        })
+    });
 
     Client { tx: tx }
 }
