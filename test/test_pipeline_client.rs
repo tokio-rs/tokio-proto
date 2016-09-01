@@ -7,7 +7,7 @@ use futures::stream::{self, Receiver};
 use futures::{Future, oneshot};
 use support::{self, mock};
 use tokio_proto::Service;
-use tokio_proto::proto::pipeline;
+use tokio_proto::pipeline;
 use tokio_core::Loop;
 
 // Transport handle

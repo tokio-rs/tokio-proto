@@ -5,7 +5,7 @@ use std::thread;
 use futures::stream::{self, Stream, Receiver};
 use futures::{Future, failed, finished, oneshot};
 use support::{self, mock};
-use tokio_proto::proto::pipeline::{self, Frame, Message};
+use tokio_proto::pipeline::{self, Frame, Message};
 use tokio_proto;
 use tokio_core::Loop;
 

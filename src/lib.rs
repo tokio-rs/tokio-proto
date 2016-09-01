@@ -1,20 +1,4 @@
-//! Tokio is a network application framework for rapid development and highly
-//! scalable production deployments of clients and servers.
-//!
-//! Tokio consists of multiple layers.
-//!
-//! # Service
-//!
-//! At a high level, Tokio provides a `Service` trait which provides a unified
-//! API for writing clients and servers as well as the ability to build
-//! reusable middleware components.
-//!
-//! The service trait is decoupled from any notion of a runtime.
-//!
-//! # Protocol building blocks
-//!
-//! Tokio aims to provide all the pieces necessary for rapidly developing
-//! protocol implementations. These components exist in the `proto` module.
+//! A collection of components for rapid protocol development
 
 #![deny(warnings, missing_docs)]
 
@@ -29,7 +13,7 @@ extern crate tokio_service;
 extern crate log;
 
 pub mod io;
-pub mod proto;
+pub mod pipeline;
 pub mod server;
 
 mod service;

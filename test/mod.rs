@@ -12,6 +12,7 @@ extern crate log;
 mod support;
 
 // Tests
-mod test_proto;
 mod test_io;
+mod test_pipeline_client;
+mod test_pipeline_server;
 mod test_server;
