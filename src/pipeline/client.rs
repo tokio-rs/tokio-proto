@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 
 use futures::stream::Stream;
-use futures::{self, Poll, Future, BoxFuture, Complete};
+use futures::{self, Future, BoxFuture, Complete, Async};
 use tokio_core::{Sender, Receiver, LoopHandle};
 
 use Service;
@@ -115,7 +115,7 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
     fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>> {
         // Try to get a new request frame
         match self.requests.poll() {
-            Poll::Ok(Some((request, complete))) => {
+            Ok(Async::Ready(Some((request, complete)))) => {
                 trace!("received request");
 
                 // Track complete handle
@@ -124,14 +124,14 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
                 Some(Ok(request))
 
             }
-            Poll::Ok(None) => None,
-            Poll::Err(e) => {
+            Ok(Async::Ready(None)) => None,
+            Err(e) => {
                 // An error on receive can only happen when the other half
                 // disconnected. In this case, the client needs to be
                 // shutdown
                 panic!("unimplemented error handling: {:?}", e);
             }
-            Poll::NotReady => None,
+            Ok(Async::NotReady) => None,
         }
     }
 

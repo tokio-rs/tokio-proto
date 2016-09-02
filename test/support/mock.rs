@@ -2,7 +2,7 @@ use std::{fmt, io};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 
-use futures::{Poll, Future};
+use futures::{Future, Async};
 use lazycell::LazyCell;
 use mio::{self, Evented, Ready, PollOpt, Registration, SetReadiness, Token};
 use tokio_proto::io::Readiness;
@@ -185,7 +185,7 @@ impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
     }
 
     fn flush(&mut self) -> io::Result<Option<()>> {
-        if let Poll::NotReady = self.source.poll_write() {
+        if !try!(self.source.poll_write()).is_ready() {
             return Ok(None)
         }
 
@@ -234,14 +234,14 @@ impl<In, Out> Readiness for Transport<In, Out> {
 
     fn is_readable(&self) -> bool {
         match self.source.poll_read() {
-            Poll::Ok(()) => true,
+            Ok(Async::Ready(())) => true,
             _ => false,
         }
     }
 
     fn is_writable(&self) -> bool {
         match self.source.poll_write() {
-            Poll::Ok(()) => true,
+            Ok(Async::Ready(())) => true,
             _ => false,
         }
     }

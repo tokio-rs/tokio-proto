@@ -34,7 +34,7 @@ pub trait NewTask: Send + 'static {
 ///
 /// use std::io::{self, Read};
 ///
-/// use futures::{Future, Poll};
+/// use futures::{Future, Poll, Async};
 /// use tokio_proto::server;
 /// use tokio_core::{Loop, TcpStream};
 ///
@@ -65,11 +65,11 @@ pub trait NewTask: Send + 'static {
 ///
 ///             if n == 0 {
 ///                 // Socket closed, shutdown
-///                 return Poll::Ok(())
+///                 return Ok(().into())
 ///             }
 ///         }
 ///
-///         Poll::NotReady
+///         Ok(Async::NotReady)
 ///     }
 /// }
 ///

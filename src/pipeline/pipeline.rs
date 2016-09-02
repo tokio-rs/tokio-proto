@@ -1,6 +1,6 @@
 use super::{Error, Frame, Message, Transport};
 use futures::stream::{Stream, Sender, FutureSender};
-use futures::{Future, Poll};
+use futures::{Future, Poll, Async};
 use std::io;
 
 // TODO:
@@ -110,9 +110,9 @@ impl<S, T, E> Pipeline<S, T>
             Some(BodySender::Busy(ref mut busy)) => {
                 debug!("waiting to be ready to send again");
                 match busy.poll() {
-                    Poll::Ok(sender) => sender,
-                    Poll::Err(_) => unimplemented!(),
-                    Poll::NotReady => {
+                    Ok(Async::Ready(sender)) => sender,
+                    Err(_) => unimplemented!(),
+                    Ok(Async::NotReady) => {
                         // Not ready
                         return false;
                     }
@@ -191,12 +191,12 @@ impl<S, T, E> Pipeline<S, T>
                 // Try sending the out body chunk
                 let mut busy = sender.send(Ok(chunk));
                 match busy.poll() {
-                    Poll::Ok(s) => {
+                    Ok(Async::Ready(s)) => {
                         debug!("immediately done");
                         self.out_body = Some(BodySender::Ready(s));
-                }
-                    Poll::Err(_e) => {} // interest canceled
-                    Poll::NotReady => {
+                    }
+                    Err(_e) => {} // interest canceled
+                    Ok(Async::NotReady) => {
                         debug!("not done yet");
                         self.out_body = Some(BodySender::Busy(busy));
                     }
@@ -277,20 +277,20 @@ impl<S, T, E> Pipeline<S, T>
         if let Some(ref mut body) = self.in_body {
             while self.transport.is_writable() {
                 match body.poll() {
-                    Poll::Ok(Some(chunk)) => {
+                    Ok(Async::Ready(Some(chunk))) => {
                         let r = try!(self.transport.write(Frame::Body(Some(chunk))));
                         if r.is_none() {
                             return Ok(false);
                         }
                     }
-                    Poll::Ok(None) => {
+                    Ok(Async::Ready(None)) => {
                         try!(self.transport.write(Frame::Body(None)));
                         // Response body flushed, let fall through
                     }
-                    Poll::Err(_) => {
+                    Err(_) => {
                         unimplemented!();
                     }
-                    Poll::NotReady => {
+                    Ok(Async::NotReady) => {
                         debug!("not ready");
                         return Ok(false);
                     }
@@ -321,24 +321,16 @@ impl<S, T, E> Future for Pipeline<S, T>
         trace!("Pipeline::tick");
 
         // Always flush the transport first
-        if let Err(e) = self.flush() {
-            return Poll::Err(e)
-        }
+        try!(self.flush());
 
         // First read off data from the socket
-        if let Err(e) = self.read_out_frames() {
-            return Poll::Err(e)
-        }
+        try!(self.read_out_frames());
 
         // Handle completed responses
-        if let Err(e) = self.write_in_frames() {
-            return Poll::Err(e)
-        }
+        try!(self.write_in_frames());
 
         // Try flushing buffered writes
-        if let Err(e) = self.flush() {
-            return Poll::Err(e)
-        }
+        try!(self.flush());
 
         // Clean shutdown of the pipeline server can happen when
         //
@@ -354,10 +346,10 @@ impl<S, T, E> Future for Pipeline<S, T>
         // case where the client shuts down half the socket.
         //
         if self.is_done() {
-            return Poll::Ok(())
+            return Ok(().into())
         }
 
         // Tick again later
-        Poll::NotReady
+        Ok(Async::NotReady)
     }
 }

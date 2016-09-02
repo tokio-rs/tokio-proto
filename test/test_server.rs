@@ -3,7 +3,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::mpsc;
 use std::thread;
 
-use futures::{oneshot, Future, Poll};
+use futures::{oneshot, Future, Poll, Async};
 use tokio_proto::server;
 use tokio_core::Loop;
 
@@ -18,7 +18,7 @@ fn test_accepting_multiple_sockets() {
         type Error = io::Error;
 
         fn poll(&mut self) -> Poll<(), io::Error> {
-            Poll::Ok(())
+            Ok(Async::Ready(()))
         }
     }
 

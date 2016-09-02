@@ -1,7 +1,7 @@
 use super::{pipeline, Error, Message, ServerService, Transport};
 use std::collections::VecDeque;
 use std::io;
-use futures::{Future, Poll};
+use futures::{Future, Poll, Async};
 
 // TODO:
 //
@@ -88,9 +88,9 @@ impl<F: Future> InFlight<F> {
         let res = match *self {
             InFlight::Active(ref mut f) => {
                 match f.poll() {
-                    Poll::Ok(e) => Ok(e),
-                    Poll::Err(e) => Err(e),
-                    Poll::NotReady => return,
+                    Ok(Async::Ready(e)) => Ok(e),
+                    Err(e) => Err(e),
+                    Ok(Async::NotReady) => return,
                 }
             }
             _ => return,

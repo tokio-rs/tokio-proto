@@ -1,4 +1,5 @@
 extern crate env_logger;
+#[macro_use]
 extern crate futures;
 extern crate lazycell;
 extern crate mio;
