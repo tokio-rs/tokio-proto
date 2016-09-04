@@ -31,7 +31,7 @@ enum InFlight<F: Future> {
 impl<T, S, E> Server<S, T>
     where T: Transport<Error = E>,
           S: ServerService<Req = T::Out, Resp = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     /// Create a new pipeline `Server` dispatcher with the given service and
     /// transport
@@ -102,7 +102,7 @@ impl<F: Future> InFlight<F> {
 impl<T, S, E> Future for Server<S, T>
     where T: Transport<Error = E>,
           S: ServerService<Req = T::Out, Resp = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     type Item = ();
     type Error = io::Error;

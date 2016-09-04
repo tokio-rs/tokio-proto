@@ -39,10 +39,7 @@ use take::Take;
 use std::{cmp, fmt, io, ops};
 
 /// A pipelined protocol frame
-pub enum Frame<T, E, B = ()>
-    where E: Send + 'static,
-          B: Send + 'static,
-{
+pub enum Frame<T, E, B = ()> {
     /// Either a request or a response
     Message(T),
     /// Returned by `Transport::read` when a streaming body will follow.
@@ -79,24 +76,24 @@ pub enum Error<E> {
 /// pipelined services
 ///
 /// `Service` should be implemented instead of this trait.
-pub trait ServerService: Send + 'static {
+pub trait ServerService {
     /// Requests handled by the service.
-    type Req: Send + 'static;
+    type Req;
 
     /// Responses given by the service.
-    type Resp: Send + 'static;
+    type Resp;
 
     /// Response body chunk
-    type Body: Send + 'static;
+    type Body;
 
     /// Response body stream
-    type BodyStream: Stream<Item = Self::Body, Error = Self::Error> + Send + 'static;
+    type BodyStream: Stream<Item = Self::Body, Error = Self::Error>;
 
     /// Errors produced by the service.
-    type Error: Send + 'static;
+    type Error;
 
     /// The future response value.
-    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error> + Send + 'static;
+    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error>;
 
     /// Process the request and return the response asynchronously.
     fn call(&self, req: Self::Req) -> Self::Fut;
@@ -108,19 +105,19 @@ pub trait ServerService: Send + 'static {
 /// `io::Transport` should be implemented instead of this trait.
 pub trait Transport: Readiness {
     /// Messages written to the transport
-    type In: Send + 'static;
+    type In;
 
     /// Inbound body frame
-    type BodyIn: Send + 'static;
+    type BodyIn;
 
     /// Messages read from the transport
-    type Out: Send + 'static;
+    type Out;
 
     /// Outbound body frame
-    type BodyOut: Send + 'static;
+    type BodyOut;
 
     /// Transport error
-    type Error: Send + 'static; // TODO: rename
+    type Error;
 
     /// Read a message from the `Transport`
     fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::Error, Self::BodyOut>>>;
@@ -136,21 +133,21 @@ pub trait Transport: Readiness {
 /// pipeline based protocols.
 ///
 /// `io::NewTransport` should be implemented instead of this trait.
-pub trait NewTransport: Send + 'static {
+pub trait NewTransport {
     /// Messages written to the transport
-    type In: Send + 'static;
+    type In;
 
     /// Inbound streaming body
-    type BodyIn: Send + 'static;
+    type BodyIn;
 
     /// Messages read from the transport
-    type Out: Send + 'static;
+    type Out;
 
     /// Outbound streaming body
-    type BodyOut: Send + 'static;
+    type BodyOut;
 
     /// Errors
-    type Error: Send + 'static;
+    type Error;
 
     /// Transport returned
     type Item: Transport<In = Self::In,
@@ -169,10 +166,7 @@ pub trait NewTransport: Send + 'static {
  *
  */
 
-impl<T, E, B> Frame<T, E, B>
-    where E: Send + 'static,
-          B: Send + 'static,
-{
+impl<T, E, B> Frame<T, E, B> {
     /// Unwraps a frame, yielding the content of the `Message`.
     pub fn unwrap_msg(self) -> T {
         match self {
@@ -217,8 +211,8 @@ impl<T, E, B> Frame<T, E, B>
 
 impl<T, E, B> fmt::Debug for Frame<T, E, B>
     where T: fmt::Debug,
-          E: fmt::Debug + Send + 'static,
-          B: fmt::Debug + Send + 'static,
+          E: fmt::Debug,
+          B: fmt::Debug,
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -308,9 +302,7 @@ impl<T, B> fmt::Debug for Message<T, B>
 
 impl<S, Resp, Body, BodyStream> ServerService for S
     where S: Service<Resp = Message<Resp, BodyStream>>,
-          Resp: Send + 'static,
-          Body: Send + 'static,
-          BodyStream: Stream<Item = Body, Error = S::Error> + Send + 'static,
+          BodyStream: Stream<Item = Body, Error = S::Error>,
 {
     type Req = S::Req;
     type Resp = Resp;
@@ -332,11 +324,6 @@ impl<S, Resp, Body, BodyStream> ServerService for S
 
 impl<T, M1, M2, B1, B2, E> Transport for T
     where T: ::io::Transport<In = Frame<M1, E, B1>, Out = Frame<M2, E, B2>>,
-          M1: Send + 'static,
-          B1: Send + 'static,
-          M2: Send + 'static,
-          B2: Send + 'static,
-          E: Send + 'static,
 {
     type In = M1;
     type BodyIn = B1;
@@ -364,7 +351,7 @@ impl<T, M1, M2, B1, B2, E> Transport for T
  */
 
 impl<F, T> NewTransport for F
-    where F: Fn() -> io::Result<T> + Send + 'static,
+    where F: Fn() -> io::Result<T>,
           T: Transport,
 {
     type In = T::In;
@@ -380,7 +367,7 @@ impl<F, T> NewTransport for F
 }
 
 impl<F, T> NewTransport for Take<F>
-    where F: FnOnce() -> io::Result<T> + Send + 'static,
+    where F: FnOnce() -> io::Result<T>,
           T: Transport,
 {
     type In = T::In;

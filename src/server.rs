@@ -17,7 +17,7 @@ pub struct ServerHandle {
 /// Create a new `Task` to handle a server socket.
 pub trait NewTask: Send + 'static {
     /// The `Task` value created by this factory
-    type Item: Future<Item=(), Error=io::Error> + 'static;
+    type Item: Future<Item=(), Error=io::Error>;
 
     /// Create and return a new `Task` value
     fn new_task(&self, stream: TcpStream) -> io::Result<Self::Item>;
@@ -122,7 +122,7 @@ impl ServerHandle {
 
 impl<T, U> NewTask for T
     where T: Fn(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Future<Item=(), Error=io::Error> + 'static,
+          U: Future<Item=(), Error=io::Error>,
 {
     type Item = U;
 
@@ -133,7 +133,7 @@ impl<T, U> NewTask for T
 
 impl<T, U> NewTask for Take<T>
     where T: FnOnce(TcpStream) -> io::Result<U> + Send + 'static,
-          U: Future<Item=(), Error=io::Error> + 'static,
+          U: Future<Item=(), Error=io::Error>,
 {
     type Item = U;
 

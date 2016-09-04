@@ -31,17 +31,17 @@ pub struct Pipeline<S, T>
 /// Dispatch messages from the transport to the service
 pub trait Dispatch {
     /// Message written to transport
-    type InMsg: Send + 'static;
+    type InMsg;
 
     /// Body written to transport
-    type InBody: Send + 'static;
+    type InBody;
 
     /// Body stream written to transport
-    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error> + Send + 'static;
+    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error>;
 
-    type OutMsg: Send + 'static;
+    type OutMsg;
 
-    type Error: Send + 'static;
+    type Error;
 
     /// Process an out message
     fn dispatch(&mut self, message: Self::OutMsg) -> io::Result<()>;
@@ -53,10 +53,7 @@ pub trait Dispatch {
     fn has_in_flight(&self) -> bool;
 }
 
-enum BodySender<B, E>
-    where B: Send + 'static,
-          E: Send + 'static,
-{
+enum BodySender<B, E> {
     Ready(Sender<B, E>),
     Busy(FutureSender<B, E>),
 }
@@ -64,7 +61,7 @@ enum BodySender<B, E>
 impl<S, T, E> Pipeline<S, T>
     where T: Transport<Error = E>,
           S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     /// Create a new pipeline `Pipeline` dispatcher with the given service and
     /// transport
@@ -311,7 +308,7 @@ impl<S, T, E> Pipeline<S, T>
 impl<S, T, E> Future for Pipeline<S, T>
     where T: Transport<Error = E>,
           S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     type Item = ();
     type Error = io::Error;

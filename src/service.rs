@@ -6,13 +6,13 @@ pub use tokio_service::{Service, SimpleService, simple_service};
 pub trait NewService {
 
     /// Requests handled by the service
-    type Req: Send + 'static;
+    type Req;
 
     /// Responses given by the service
-    type Resp: Send + 'static;
+    type Resp;
 
     /// Errors produced by the service
-    type Error: Send + 'static;
+    type Error;
 
     /// The `Service` value created by this factory
     type Item: Service<Req = Self::Req, Resp = Self::Resp, Error = Self::Error>;

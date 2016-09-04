@@ -10,10 +10,8 @@ use super::{pipeline, Error, Message, Transport, NewTransport};
 
 /// Client `Service` for the pipeline protocol.
 pub struct Client<Req, Resp, ReqBody, E>
-    where Req: Send + 'static,
-          Resp: Send + 'static,
-          ReqBody: Stream<Error = E>,
-          E: From<Error<E>> + Send + 'static,
+    where ReqBody: Stream<Error = E>,
+          E: From<Error<E>>,
 {
     tx: Sender<(Message<Req, ReqBody>, Complete<Result<Resp, E>>)>,
 }
@@ -21,7 +19,7 @@ pub struct Client<Req, Resp, ReqBody, E>
 struct Dispatch<T, B, E>
     where T: Transport<Error = E>,
           B: Stream<Item = T::BodyIn, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     requests: Receiver<(Message<T::In, B>, Complete<Result<T::Out, E>>)>,
     in_flight: VecDeque<Complete<Result<T::Out, E>>>,
@@ -30,7 +28,9 @@ struct Dispatch<T, B, E>
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
 pub fn connect<T, B, E>(handle: LoopHandle, new_transport: T)
         -> Client<T::In, T::Out, B, E>
-    where T: NewTransport<Error = E>,
+    where T: NewTransport<Error = E> + Send + 'static,
+          T::In: Send + 'static,
+          T::Out: Send + 'static,
           B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
           E: From<Error<E>> + Send + 'static,
 {
@@ -62,7 +62,7 @@ pub fn connect<T, B, E>(handle: LoopHandle, new_transport: T)
 impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
     where Req: Send + 'static,
           Resp: Send + 'static,
-          ReqBody: Stream<Error = E> + Send + 'static,
+          ReqBody: Stream<Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
     type Req = Message<Req, ReqBody>;
@@ -81,10 +81,8 @@ impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
 }
 
 impl<Req, Resp, ReqBody, E> Clone for Client<Req, Resp, ReqBody, E>
-    where Req: Send + 'static,
-          Resp: Send + 'static,
-          ReqBody: Stream<Error = E>,
-          E: From<Error<E>> + Send + 'static,
+    where ReqBody: Stream<Error = E>,
+          E: From<Error<E>>,
 {
     fn clone(&self) -> Client<Req, Resp, ReqBody, E> {
         Client { tx: self.tx.clone() }
@@ -93,8 +91,8 @@ impl<Req, Resp, ReqBody, E> Clone for Client<Req, Resp, ReqBody, E>
 
 impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
     where T: Transport<Error = E>,
-          B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
-          E: From<Error<E>> + Send + 'static,
+          B: Stream<Item = T::BodyIn, Error = E>,
+          E: From<Error<E>>,
 {
     type InMsg = T::In;
     type InBody = T::BodyIn;
@@ -143,7 +141,7 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
 impl<T, B, E> Drop for Dispatch<T, B, E>
     where T: Transport<Error = E>,
           B: Stream<Item = T::BodyIn, Error = E>,
-          E: From<Error<E>> + Send + 'static,
+          E: From<Error<E>>,
 {
     fn drop(&mut self) {
         // Complete any pending requests with an error
