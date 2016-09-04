@@ -29,60 +29,34 @@ pub trait NewTask: Send + 'static {
 /// ```rust,no_run
 /// extern crate futures;
 /// extern crate tokio_proto;
-/// #[macro_use]
 /// extern crate tokio_core;
 ///
-/// use std::io::{self, Read};
+/// use futures::Future;
+/// use futures::stream::Stream;
+/// use tokio_core::Loop;
 ///
-/// use futures::{Future, Poll, Async};
-/// use tokio_proto::server;
-/// use tokio_core::{Loop, TcpStream};
-///
-/// struct Connection {
-///     stream: TcpStream,
-///     buf: Box<[u8]>,
-/// }
-///
-/// impl Connection {
-///     fn new(stream: TcpStream) -> Connection {
-///         let buf = vec![0; 1024];
-///
-///         Connection {
-///             stream: stream,
-///             buf: buf.into_boxed_slice(),
-///         }
-///     }
-/// }
-///
-/// impl Future for Connection {
-///     type Item = ();
-///     type Error = io::Error;
-///
-///     fn poll(&mut self) -> Poll<(), io::Error> {
-///         loop {
-///             let n = try_nb!(self.stream.read(&mut self.buf));
-///             println!("read {} bytes", n);
-///
-///             if n == 0 {
-///                 // Socket closed, shutdown
-///                 return Ok(().into())
-///             }
-///         }
-///
-///         Ok(Async::NotReady)
-///     }
-/// }
-///
-/// fn main() {
+/// pub fn main() {
+///     // Create a new loop
 ///     let mut lp = Loop::new().unwrap();
 ///
-///     // Launch the server
-///     server::listen(lp.handle(),
-///                    "0.0.0.0:3245".parse().unwrap(),
-///                    |stream| Ok(Connection::new(stream)));
+///     // Bind to port 4000
+///     let addr = "0.0.0.0:4000".parse().unwrap();
 ///
-///     // Run the reactor
-///     lp.run(futures::empty::<(), ()>()).unwrap();
+///     // Create the new TCP listener
+///     let listener = lp.handle().tcp_listen(&addr);
+///
+///     let srv = listener.and_then(|l| {
+///         // Accept each incoming connection
+///         l.incoming().for_each(|socket| {
+///             // Do something with the socket
+///             println!("{:#?}", socket);
+///             Ok(())
+///         })
+///     });
+///
+///     println!("listening on {:?}", addr);
+///
+///     lp.run(srv).unwrap();
 /// }
 /// ```
 pub fn listen<T>(handle: LoopHandle,
