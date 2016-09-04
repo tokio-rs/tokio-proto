@@ -423,7 +423,8 @@ fn msg_with_body(msg: Msg) -> OutFrame {
 /// Setup a reactor running a pipeline::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: pipeline::ServerService<Req = pipeline::Message<Msg, Body>, Resp = Msg, Body = u32, BodyStream = Body, Error = io::Error>,
+    where S: pipeline::ServerService<Req = pipeline::Message<Msg, Body>, Resp = Msg, Body = u32, BodyStream = Body, Error = io::Error> + Send + 'static,
+          S::Fut: Send + 'static,
           F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),
 {
     drop(::env_logger::init());
