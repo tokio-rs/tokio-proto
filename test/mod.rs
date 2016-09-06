@@ -3,6 +3,7 @@ extern crate env_logger;
 extern crate futures;
 extern crate lazycell;
 extern crate mio;
+extern crate rand;
 extern crate take;
 extern crate tokio_proto;
 extern crate tokio_core;
@@ -14,6 +15,7 @@ mod support;
 
 // Tests
 mod test_io;
+mod test_multiplex_server;
 mod test_pipeline_client;
 mod test_pipeline_server;
 mod test_server;

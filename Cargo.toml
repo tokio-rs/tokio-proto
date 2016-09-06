@@ -22,11 +22,14 @@ exclude       = [
 ]
 
 [dependencies]
-bytes = { git = "https://github.com/carllerche/bytes" }
-futures = { git = "https://github.com/alexcrichton/futures-rs" }
 log = "0.3.6"
 slab = "0.3"
 take = "0.1.0"
+rand = "0.3.14"
+smallvec = "0.2.0"
+
+bytes = { git = "https://github.com/carllerche/bytes" }
+futures = { git = "https://github.com/alexcrichton/futures-rs" }
 tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
 tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 

@@ -6,6 +6,8 @@ extern crate bytes;
 extern crate futures;
 extern crate slab;
 extern crate take;
+extern crate rand;
+extern crate smallvec;
 extern crate tokio_core;
 extern crate tokio_service;
 
@@ -13,6 +15,7 @@ extern crate tokio_service;
 extern crate log;
 
 pub mod io;
+pub mod multiplex;
 pub mod pipeline;
 pub mod server;
 
