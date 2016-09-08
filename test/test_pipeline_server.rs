@@ -7,7 +7,7 @@ use futures::{Future, failed, finished, oneshot};
 use support::{self, mock};
 use tokio_proto::pipeline::{self, Frame, Message};
 use tokio_proto;
-use tokio_core::Loop;
+use tokio_core::reactor::Core;
 
 // The message type is a static string for both the request and response
 type Msg = &'static str;
@@ -431,22 +431,19 @@ fn run<S, F>(service: S, f: F)
     let (tx, rx) = oneshot();
     let (tx2, rx2) = mpsc::channel();
     let t = thread::spawn(move || {
-        let mut lp = Loop::new().unwrap();
-        tx2.send(lp.handle()).unwrap();
+        let mut lp = Core::new().unwrap();
+
+        let handle = lp.handle();
+        let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
+
+        let transport = new_transport.new_transport().unwrap();
+        let dispatch = pipeline::Server::new(service, transport).unwrap();
+        handle.spawn(dispatch.map_err(|e| error!("error: {}", e)));
+        tx2.send(mock).unwrap();
         lp.run(rx)
     });
-    let handle = rx2.recv().unwrap();
-
-    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
-
-    let transport = new_transport.new_transport().wait().unwrap();
-    let dispatch = pipeline::Server::new(service, transport).unwrap();
-    handle.spawn(|_| {
-        dispatch.map_err(|e| error!("error: {}", e))
-    });
-
+    let mock = rx2.recv().unwrap();
     f(mock);
-
     tx.complete(());
     t.join().unwrap().unwrap();
 }

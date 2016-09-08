@@ -2,23 +2,21 @@ use std::{fmt, io};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
 
-use futures::{Future, Async};
 use lazycell::LazyCell;
 use mio::{self, Evented, Ready, PollOpt, Registration, SetReadiness, Token};
 use tokio_proto::io::Readiness;
-use tokio_core::io::IoFuture;
-use tokio_core::{ReadinessStream, LoopHandle};
+use tokio_core::reactor::{PollEvented, Handle};
 
 pub struct Transport<In, Out> {
     tx: Sender<Write<In>>,
-    source: ReadinessStream<Io<Out>>,
+    source: PollEvented<Io<Out>>,
     pending: Option<In>,
 }
 
 pub struct NewTransport<In, Out> {
     tx: Sender<Write<In>>,
     inner: Arc<Mutex<Inner<Out>>>,
-    handle: LoopHandle,
+    handle: Handle,
 }
 
 pub struct TransportHandle<In, Out> {
@@ -57,7 +55,7 @@ enum Write<T> {
 }
 
 /// Create a new mock transport pair
-pub fn transport<In, Out>(handle: LoopHandle) -> (TransportHandle<In, Out>, NewTransport<In, Out>) {
+pub fn transport<In, Out>(handle: Handle) -> (TransportHandle<In, Out>, NewTransport<In, Out>) {
     let (tx, rx) = mpsc::channel();
 
     let inner = Arc::new(Mutex::new(Inner {
@@ -185,7 +183,7 @@ impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
     }
 
     fn flush(&mut self) -> io::Result<Option<()>> {
-        if !try!(self.source.poll_write()).is_ready() {
+        if !self.source.poll_write().is_ready() {
             return Ok(None)
         }
 
@@ -233,17 +231,11 @@ fn shift<T>(queue: &mut Vec<T>) -> Option<T> {
 impl<In, Out> Readiness for Transport<In, Out> {
 
     fn is_readable(&self) -> bool {
-        match self.source.poll_read() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.source.poll_read().is_ready()
     }
 
     fn is_writable(&self) -> bool {
-        match self.source.poll_write() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.source.poll_write().is_ready()
     }
 }
 
@@ -251,7 +243,7 @@ impl<In, Out> NewTransport<In, Out>
     where In: Send + 'static,
           Out: Send + 'static,
 {
-    pub fn new_transport(self) -> IoFuture<Transport<In, Out>> {
+    pub fn new_transport(self) -> io::Result<Transport<In, Out>> {
         let NewTransport { tx, inner, handle } = self;
 
         let io = Io {
@@ -259,15 +251,13 @@ impl<In, Out> NewTransport<In, Out>
             inner: inner,
         };
 
-        let source = ReadinessStream::new(handle, io);
+        let source = try!(PollEvented::new(io, &handle));
 
-        source.map(|source| {
-            Transport {
-                tx: tx,
-                source: source,
-                pending: None,
-            }
-        }).boxed()
+        Ok(Transport {
+            tx: tx,
+            source: source,
+            pending: None,
+        })
     }
 }
 

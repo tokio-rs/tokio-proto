@@ -8,7 +8,7 @@ use futures::{Future, oneshot};
 use support::{self, mock};
 use tokio_proto::Service;
 use tokio_proto::pipeline;
-use tokio_core::Loop;
+use tokio_core::reactor::Core;
 
 // Transport handle
 type TransportHandle = mock::TransportHandle<Frame, Frame>;
@@ -95,20 +95,21 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
     let (tx, rx) = oneshot();
     let (tx2, rx2) = mpsc::channel();
     let t = thread::spawn(move || {
-        let mut lp = Loop::new().unwrap();
-        tx2.send(lp.handle()).unwrap();
+        let mut lp = Core::new().unwrap();
+        let handle = lp.handle();
+        let (mock, new_transport) = mock::transport(handle.clone());
+
+        let transport = new_transport.new_transport().unwrap();
+        let transport = RefCell::new(Some(transport));
+
+        let service = pipeline::connect(&handle, move || {
+            Ok(transport.borrow_mut().take().unwrap())
+        }).unwrap();
+        tx2.send((mock, service)).unwrap();
         lp.run(rx)
     });
 
-    let handle = rx2.recv().unwrap();
-    let (mock, new_transport) = mock::transport(handle.clone());
-
-    let transport = new_transport.new_transport().wait().unwrap();
-    let transport = RefCell::new(Some(transport));
-
-    let service = pipeline::connect(handle, move || {
-        Ok(transport.borrow_mut().take().unwrap())
-    });
+    let (mock, service) = rx2.recv().unwrap();
 
     f(mock, service);
 
