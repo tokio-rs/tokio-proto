@@ -37,7 +37,3 @@ tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 env_logger = "0.3.0"
 lazycell = "0.4.0"
 mio = "0.6"
-
-[[test]]
-name = "test"
-path = "test/mod.rs"

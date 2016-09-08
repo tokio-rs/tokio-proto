@@ -1,13 +1,22 @@
-use std::io;
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate rand;
+
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
+mod support;
 
 use futures::stream::{self, Stream, Receiver};
 use futures::{Future, failed, finished, oneshot};
-use support::{self, mock};
+use support::mock;
 use tokio_proto::pipeline::{self, Frame, Message};
-use tokio_proto;
 use tokio_core::reactor::Core;
+use std::io;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 
 // The message type is a static string for both the request and response
 type Msg = &'static str;

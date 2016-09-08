@@ -1,14 +1,24 @@
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate rand;
+
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
+mod support;
+
+use futures::stream::{self, Receiver};
+use futures::{Future, oneshot};
+use support::mock;
+use tokio_proto::Service;
+use tokio_proto::pipeline;
+use tokio_core::reactor::Core;
 use std::io;
 use std::thread;
 use std::cell::RefCell;
 use std::sync::mpsc;
-
-use futures::stream::{self, Receiver};
-use futures::{Future, oneshot};
-use support::{self, mock};
-use tokio_proto::Service;
-use tokio_proto::pipeline;
-use tokio_core::reactor::Core;
 
 // Transport handle
 type TransportHandle = mock::TransportHandle<Frame, Frame>;

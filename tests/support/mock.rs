@@ -1,11 +1,13 @@
+extern crate lazycell;
+extern crate mio;
+
+use self::lazycell::LazyCell;
+use self::mio::{Evented, Ready, PollOpt, Registration, SetReadiness, Token};
+use tokio_proto::io::Readiness;
+use tokio_core::reactor::{PollEvented, Handle};
 use std::{fmt, io};
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::{self, Sender, Receiver};
-
-use lazycell::LazyCell;
-use mio::{self, Evented, Ready, PollOpt, Registration, SetReadiness, Token};
-use tokio_proto::io::Readiness;
-use tokio_core::reactor::{PollEvented, Handle};
 
 pub struct Transport<In, Out> {
     tx: Sender<Write<In>>,

@@ -1,10 +1,20 @@
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate rand;
+
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
+mod support;
+
 use futures::stream::{Receiver};
 use futures::{Future, finished, oneshot};
-use support::{self, mock};
+use support::mock;
 use tokio_proto::multiplex::{self, RequestId, Frame, Message};
-use tokio_proto;
 use tokio_core::reactor::Core;
-use rand::{self, Rng};
+use rand::Rng;
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};

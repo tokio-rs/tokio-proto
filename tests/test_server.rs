@@ -1,13 +1,21 @@
-use std::io;
-use std::net::{SocketAddr, TcpStream};
-use std::sync::mpsc;
-use std::thread;
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate rand;
+
+#[macro_use]
+extern crate log;
+extern crate env_logger;
+
+mod support;
 
 use futures::{oneshot, Future, Poll, Async};
 use tokio_proto::server;
 use tokio_core::reactor::Core;
-
-use support;
+use std::io;
+use std::net::{SocketAddr, TcpStream};
+use std::sync::mpsc;
+use std::thread;
 
 #[test]
 fn test_accepting_multiple_sockets() {
