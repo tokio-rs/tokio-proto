@@ -1,6 +1,8 @@
 #![allow(warnings)]
 
-use io::{Readiness, Stream, Transport, TryRead, TryWrite};
+use futures::Async;
+use tokio_core::io::Io;
+use io::{Transport, TryRead, TryWrite};
 use bytes::{alloc, MutBuf, BlockBuf, Source};
 use std::io;
 
@@ -43,7 +45,7 @@ pub trait Serialize {
 }
 
 impl<T, P, S> Framed<T, P, S>
-    where T: Stream,
+    where T: Io,
           P: Parse,
           S: Serialize,
 {
@@ -67,12 +69,20 @@ impl<T, P, S> Framed<T, P, S>
 }
 
 impl<T, P, S> Transport for Framed<T, P, S>
-    where T: Stream,
+    where T: Io,
           P: Parse,
           S: Serialize,
 {
     type In = S::In;
     type Out = P::Out;
+
+    fn poll_read(&mut self) -> Async<()> {
+        if self.is_readable || self.upstream.poll_read().is_ready() {
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        }
+    }
 
     fn read(&mut self) -> io::Result<Option<Self::Out>> {
         loop {
@@ -107,8 +117,16 @@ impl<T, P, S> Transport for Framed<T, P, S>
         }
     }
 
+    fn poll_write(&mut self) -> Async<()> {
+        // Always accept writes and let the write buffer grow
+        //
+        // TODO: This may not be the best option for robustness, but for now it
+        // makes the microbenchmarks happy.
+        Async::Ready(())
+    }
+
     fn write(&mut self, msg: Self::In) -> io::Result<Option<()>> {
-        if !self.is_writable() {
+        if !self.poll_write().is_ready() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "transport not currently writable"));
         }
 
@@ -147,21 +165,4 @@ impl<T, P, S> Transport for Framed<T, P, S>
             }
         }
     }
-}
-
-impl<T, P, S> Readiness for Framed<T, P, S>
-    where T: Stream
-{
-    fn is_readable(&self) -> bool {
-        self.is_readable || self.upstream.is_readable()
-    }
-
-    fn is_writable(&self) -> bool {
-        // Always accept writes and let the write buffer grow
-        //
-        // TODO: This may not be the best option for robustness, but for now it
-        // makes the microbenchmarks happy.
-        true
-    }
-
 }

@@ -217,7 +217,7 @@ impl<S, T, E> Pipeline<S, T>
 
     fn write_in_frames(&mut self) -> io::Result<()> {
         trace!("write_in_frames");
-        while self.transport.is_writable() {
+        while self.transport.poll_write().is_ready() {
             // Ensure the current in body is fully written
             if !try!(self.write_in_body()) {
                 debug!("write in body not done");
@@ -272,7 +272,7 @@ impl<S, T, E> Pipeline<S, T>
     fn write_in_body(&mut self) -> io::Result<bool> {
         trace!("write_in_body");
         if let Some(ref mut body) = self.in_body {
-            while self.transport.is_writable() {
+            while self.transport.poll_write().is_ready() {
                 match body.poll() {
                     Ok(Async::Ready(Some(chunk))) => {
                         let r = try!(self.transport.write(Frame::Body(Some(chunk))));

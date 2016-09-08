@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod mock;
 
 use std::time::Duration;

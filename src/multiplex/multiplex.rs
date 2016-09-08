@@ -211,7 +211,7 @@ impl<S, T, E> Multiplex<S, T>
     }
 
     fn write_in_frames(&mut self) -> io::Result<()> {
-        while self.transport.is_writable() {
+        while self.transport.poll_write().is_ready() {
             // Write the next in-flight in message
             match self.dispatch.poll() {
                 Some((id, msg)) => try!(self.write_in_message(id, msg)),

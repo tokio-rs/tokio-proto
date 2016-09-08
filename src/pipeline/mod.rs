@@ -32,8 +32,7 @@ pub use self::client::{connect, Client};
 pub use self::server::Server;
 
 use Service;
-use io::{Readiness};
-use futures::Future;
+use futures::{Async, Future};
 use futures::stream::{Stream, Sender};
 use take::Take;
 use std::{cmp, fmt, io, ops};
@@ -103,7 +102,7 @@ pub trait ServerService {
 /// pipeline based protocols.
 ///
 /// `io::Transport` should be implemented instead of this trait.
-pub trait Transport: Readiness {
+pub trait Transport {
     /// Messages written to the transport
     type In;
 
@@ -119,8 +118,14 @@ pub trait Transport: Readiness {
     /// Transport error
     type Error;
 
+    /// Tests to see if this Transport may be readable.
+    fn poll_read(&mut self) -> Async<()>;
+
     /// Read a message from the `Transport`
     fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::BodyOut, Self::Error>>>;
+
+    /// Tests to see if this I/O object may be writable.
+    fn poll_write(&mut self) -> Async<()>;
 
     /// Write a message to the `Transport`
     fn write(&mut self, req: Frame<Self::In, Self::BodyIn, Self::Error>) -> io::Result<Option<()>>;
@@ -331,8 +336,16 @@ impl<T, M1, M2, B1, B2, E> Transport for T
     type BodyOut = B2;
     type Error = E;
 
+    fn poll_read(&mut self) -> Async<()> {
+        ::io::Transport::poll_read(self)
+    }
+
     fn read(&mut self) -> io::Result<Option<Frame<M2, B2, E>>> {
         ::io::Transport::read(self)
+    }
+
+    fn poll_write(&mut self) -> Async<()> {
+        ::io::Transport::poll_write(self)
     }
 
     fn write(&mut self, req: Frame<M1, B1, E>) -> io::Result<Option<()>> {

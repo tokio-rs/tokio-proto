@@ -1,9 +1,10 @@
+extern crate futures;
 extern crate lazycell;
 extern crate mio;
 
+use self::futures::Async;
 use self::lazycell::LazyCell;
 use self::mio::{Evented, Ready, PollOpt, Registration, SetReadiness, Token};
-use tokio_proto::io::Readiness;
 use tokio_core::reactor::{PollEvented, Handle};
 use std::{fmt, io};
 use std::sync::{Arc, Mutex};
@@ -160,6 +161,10 @@ impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
     type In = In;
     type Out = Out;
 
+    fn poll_read(&mut self) -> Async<()> {
+        self.source.poll_read()
+    }
+
     /// Read a message frame from the `Transport`
     fn read(&mut self) -> io::Result<Option<Out>> {
         match self.source.get_ref().inner.lock().unwrap().recv() {
@@ -172,9 +177,13 @@ impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
         }
     }
 
+    fn poll_write(&mut self) -> Async<()> {
+        self.source.poll_write()
+    }
+
     /// Write a message frame to the `Transport`
     fn write(&mut self, req: In) -> io::Result<Option<()>> {
-        if !self.is_writable() {
+        if !self.poll_write().is_ready() {
             panic!("cannot write request when not writable");
         }
 
@@ -228,17 +237,6 @@ fn shift<T>(queue: &mut Vec<T>) -> Option<T> {
     }
 
     Some(queue.remove(0))
-}
-
-impl<In, Out> Readiness for Transport<In, Out> {
-
-    fn is_readable(&self) -> bool {
-        self.source.poll_read().is_ready()
-    }
-
-    fn is_writable(&self) -> bool {
-        self.source.poll_write().is_ready()
-    }
 }
 
 impl<In, Out> NewTransport<In, Out>

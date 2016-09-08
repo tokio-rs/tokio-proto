@@ -1,7 +1,4 @@
-// TODO: Should Transport::write() internally call flush() or should the API
-// document that users of Transport should call flush() after writing?
-
-use io::Readiness;
+use futures::Async;
 use std::io;
 
 
@@ -11,15 +8,21 @@ use std::io;
 /// backed by a `TcpStream`.
 ///
 /// For more details, read the module level documentation.
-pub trait Transport: Readiness {
+pub trait Transport {
     /// Messages written to the transport
     type In;
 
     /// Messages read from the transport
     type Out;
 
+    /// Tests to see if this Transport may be readable.
+    fn poll_read(&mut self) -> Async<()>;
+
     /// Read a message frame from the `Transport`
     fn read(&mut self) -> io::Result<Option<Self::Out>>;
+
+    /// Tests to see if this I/O object may be writable.
+    fn poll_write(&mut self) -> Async<()>;
 
     /// Write a message frame to the `Transport`
     fn write(&mut self, req: Self::In) -> io::Result<Option<()>>;

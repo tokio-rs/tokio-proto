@@ -33,7 +33,13 @@
 //! something like:
 //!
 //! ```rust,no_run
-//! use tokio_proto::io::{TryRead, TryWrite, Readiness, Transport};
+//! extern crate futures;
+//! extern crate tokio_core;
+//! extern crate tokio_proto;
+//!
+//! use futures::Async;
+//! use tokio_core::io::Io;
+//! use tokio_proto::io::{TryRead, TryWrite, Transport};
 //! use std::io;
 //!
 //! struct LineTransport<T> {
@@ -42,9 +48,17 @@
 //!     wr: Vec<u8>,
 //! }
 //!
-//! impl<T: TryRead + TryWrite + Readiness> Transport for LineTransport<T> {
+//! impl<T: Io> Transport for LineTransport<T> {
 //!     type In = String;
 //!     type Out = String;
+//!
+//!     fn poll_read(&mut self) -> Async<()> {
+//!         if self.rd.contains(&b'\n') || self.source.poll_read().is_ready() {
+//!             Async::Ready(())
+//!         } else {
+//!             Async::NotReady
+//!         }
+//!     }
 //!
 //!     fn read(&mut self) -> io::Result<Option<String>> {
 //!         loop {
@@ -53,6 +67,12 @@
 //!                 return Ok(Some(line));
 //!             }
 //!         }
+//!     }
+//!
+//!     fn poll_write(&mut self) -> Async<()> {
+//!         // The source is always writable since we don't cap the write
+//!         // buffer size. Not an ideal production behavior...
+//!         Async::Ready(())
 //!     }
 //!
 //!     fn write(&mut self, req: String) -> io::Result<Option<()>> {
@@ -73,18 +93,6 @@
 //!     }
 //! }
 //!
-//! impl<T: Readiness> Readiness for LineTransport<T> {
-//!     fn is_readable(&self) -> bool {
-//!         self.rd.contains(&b'\n') || self.source.is_readable()
-//!     }
-//!
-//!     fn is_writable(&self) -> bool {
-//!         // The source is always writable since we don't cap the write
-//!         // buffer size. Not an ideal production behavior...
-//!         true
-//!     }
-//! }
-//!
 //! fn parse_new_line(buf: &mut Vec<u8>) -> Option<String> {
 //!     // Search for "\n", if found, read everything from the start of the
 //!     // buffer to the newline as a string then shift all bytes after the
@@ -95,6 +103,9 @@
 //! fn shift(buf: &mut Vec<u8>, n: usize) {
 //!     // Drop the first `n` bytes in the buffer and move all bytes after that
 //!     // point to the front of the buffer.
+//! }
+//!
+//! pub fn main() {
 //! }
 //! ```
 
