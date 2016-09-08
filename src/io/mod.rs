@@ -110,13 +110,9 @@
 //! ```
 
 mod framing;
-mod ready;
-mod stream;
 mod transport;
 
 pub use self::framing::{Framed, Parse, Serialize};
-pub use self::ready::{Readiness, Ready};
-pub use self::stream::Stream;
 pub use self::transport::Transport;
 
 use bytes::{Buf, MutBuf, ReadExt, WriteExt};
