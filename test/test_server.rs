@@ -5,7 +5,7 @@ use std::thread;
 
 use futures::{oneshot, Future, Poll, Async};
 use tokio_proto::server;
-use tokio_core::Loop;
+use tokio_core::reactor::Core;
 
 use support;
 
@@ -23,18 +23,18 @@ fn test_accepting_multiple_sockets() {
     }
 
     let (tx, rx) = mpsc::channel();
+    let address: SocketAddr = "127.0.0.1:14564".parse().unwrap();
+    let address2 = address.clone();
     let t = thread::spawn(move || {
-        let mut lp = Loop::new().unwrap();
+        let mut lp = Core::new().unwrap();
         let (tx2, rx2) = oneshot();
-        tx.send((lp.handle(), tx2)).unwrap();
+        server::listen(&lp.handle(), address2, |_| Ok(Connection)).unwrap();
+        tx.send(tx2).unwrap();
         lp.run(rx2)
     });
 
 
-    let address: SocketAddr = "127.0.0.1:14564".parse().unwrap();
-
-    let (handle, tx) = rx.recv().unwrap();
-    server::listen(handle, address.clone(), |_| Ok(Connection)).wait().unwrap();
+    let tx = rx.recv().unwrap();
 
     let _ = TcpStream::connect(&address).unwrap();
 

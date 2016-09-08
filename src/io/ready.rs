@@ -1,7 +1,6 @@
 use std::{fmt, ops};
 
-use futures::Async;
-use tokio_core::{TcpStream, UdpSocket};
+use tokio_core::net::{TcpStream, UdpSocket};
 
 /// A Tokio aware source.
 ///
@@ -135,32 +134,20 @@ impl fmt::Debug for Ready {
 
 impl Readiness for TcpStream {
     fn is_readable(&self) -> bool {
-        match self.poll_read() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.poll_read().is_ready()
     }
 
     fn is_writable(&self) -> bool {
-        match self.poll_write() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.poll_write().is_ready()
     }
 }
 
 impl Readiness for UdpSocket {
     fn is_readable(&self) -> bool {
-        match self.poll_read() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.poll_read().is_ready()
     }
 
     fn is_writable(&self) -> bool {
-        match self.poll_write() {
-            Ok(Async::Ready(())) => true,
-            _ => false,
-        }
+        self.poll_write().is_ready()
     }
 }

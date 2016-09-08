@@ -3,7 +3,8 @@ use std::io;
 
 use futures::stream::Stream;
 use futures::{self, Future, BoxFuture, Complete, Async};
-use tokio_core::{Sender, Receiver, LoopHandle};
+use tokio_core::reactor::Handle;
+use tokio_core::channel::{channel, Sender, Receiver};
 
 use Service;
 use super::{pipeline, Error, Message, Transport, NewTransport};
@@ -26,37 +27,33 @@ struct Dispatch<T, B, E>
 }
 
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
-pub fn connect<T, B, E>(handle: LoopHandle, new_transport: T)
-        -> Client<T::In, T::Out, B, E>
+pub fn connect<T, B, E>(handle: &Handle, new_transport: T)
+                        -> io::Result<Client<T::In, T::Out, B, E>>
     where T: NewTransport<Error = E> + Send + 'static,
           T::In: Send + 'static,
           T::Out: Send + 'static,
           B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
           E: From<Error<E>> + Send + 'static,
 {
-    let (tx, rx) = handle.clone().channel();
+    let (tx, rx) = try!(channel(handle));
 
-    handle.spawn(|_| {
-        rx.and_then(move |rx| {
-            // Create the transport
-            let transport = try!(new_transport.new_transport());
+    // Create the transport
+    let transport = try!(new_transport.new_transport());
 
-            // Create the client dispatch
-            let dispatch: Dispatch<T::Item, B, E> = Dispatch {
-                requests: rx,
-                in_flight: VecDeque::with_capacity(32),
-            };
+    // Create the client dispatch
+    let dispatch: Dispatch<T::Item, B, E> = Dispatch {
+        requests: rx,
+        in_flight: VecDeque::with_capacity(32),
+    };
 
-            // Create the pipeline with the dispatch and transport
-            let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
-            Ok(pipeline)
-        }).flatten().map_err(|e| {
-            // TODO: where to punt this error to?
-            error!("pipeline error: {}", e)
-        })
-    });
+    // Create the pipeline with the dispatch and transport
+    let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
+    handle.spawn(pipeline.map_err(|e| {
+        // TODO: where to punt this error to?
+        error!("pipeline error: {}", e)
+    }));
 
-    Client { tx: tx }
+    Ok(Client { tx: tx })
 }
 
 impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>

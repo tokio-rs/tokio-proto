@@ -6,8 +6,8 @@ use std::net::SocketAddr;
 use futures::stream::Stream;
 use futures::Future;
 use take::Take;
-use tokio_core::io::IoFuture;
-use tokio_core::{TcpStream, LoopHandle};
+use tokio_core::reactor::Handle;
+use tokio_core::net::{TcpListener, TcpStream};
 
 /// A handle to a running server.
 pub struct ServerHandle {
@@ -33,25 +33,24 @@ pub trait NewTask: Send + 'static {
 ///
 /// use futures::Future;
 /// use futures::stream::Stream;
-/// use tokio_core::Loop;
+/// use tokio_core::reactor::Core;
+/// use tokio_core::net::TcpListener;
 ///
 /// pub fn main() {
 ///     // Create a new loop
-///     let mut lp = Loop::new().unwrap();
+///     let mut lp = Core::new().unwrap();
 ///
 ///     // Bind to port 4000
 ///     let addr = "0.0.0.0:4000".parse().unwrap();
 ///
 ///     // Create the new TCP listener
-///     let listener = lp.handle().tcp_listen(&addr);
+///     let listener = TcpListener::bind(&addr, &lp.handle()).unwrap();
 ///
-///     let srv = listener.and_then(|l| {
-///         // Accept each incoming connection
-///         l.incoming().for_each(|socket| {
-///             // Do something with the socket
-///             println!("{:#?}", socket);
-///             Ok(())
-///         })
+///     // Accept each incoming connection
+///     let srv = listener.incoming().for_each(|socket| {
+///         // Do something with the socket
+///         println!("{:#?}", socket);
+///         Ok(())
 ///     });
 ///
 ///     println!("listening on {:?}", addr);
@@ -59,32 +58,28 @@ pub trait NewTask: Send + 'static {
 ///     lp.run(srv).unwrap();
 /// }
 /// ```
-pub fn listen<T>(handle: LoopHandle,
+pub fn listen<T>(handle: &Handle,
                  addr: SocketAddr,
-                 new_task: T) -> IoFuture<ServerHandle>
+                 new_task: T) -> io::Result<ServerHandle>
     where T: NewTask
 {
-    let listener = handle.clone().tcp_listen(&addr);
-    listener.and_then(move |socket| {
-        let addr = try!(socket.local_addr());
+    let socket = try!(TcpListener::bind(&addr, handle));
+    let addr = try!(socket.local_addr());
 
-        handle.spawn(|pin| {
-            let pin = pin.clone();
-            socket.incoming().for_each(move |(socket, _)| {
-                let task = try!(new_task.new_task(socket));
-                // TODO: where to punt this error to?
-                pin.spawn(task.map_err(|e| {
-                    error!("task error: {}", e);
-                }));
-                Ok(())
-            }).map_err(|e| {
-                // TODO: where to punt this error to?
-                error!("server error: {}", e);
-            })
-        });
+    let handle2 = handle.clone();
+    handle.spawn(socket.incoming().for_each(move |(socket, _)| {
+        let task = try!(new_task.new_task(socket));
+        // TODO: where to punt this error to?
+        handle2.spawn(task.map_err(|e| {
+            error!("task error: {}", e);
+        }));
+        Ok(())
+    }).map_err(|e| {
+        // TODO: where to punt this error to?
+        error!("server error: {}", e);
+    }));
 
-        Ok(ServerHandle { local_addr: addr })
-    }).boxed()
+    Ok(ServerHandle { local_addr: addr })
 }
 
 impl ServerHandle {

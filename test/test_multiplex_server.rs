@@ -3,7 +3,7 @@ use futures::{Future, finished, oneshot};
 use support::{self, mock};
 use tokio_proto::multiplex::{self, RequestId, Frame, Message};
 use tokio_proto;
-use tokio_core::Loop;
+use tokio_core::reactor::Core;
 use rand::{self, Rng};
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
@@ -331,19 +331,19 @@ fn run<S, F>(service: S, f: F)
     let (tx, rx) = oneshot();
     let (tx2, rx2) = mpsc::channel();
     let t = thread::spawn(move || {
-        let mut lp = Loop::new().unwrap();
-        tx2.send(lp.handle()).unwrap();
+        let mut lp = Core::new().unwrap();
+        let handle = lp.handle();
+        let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
+
+        let transport = new_transport.new_transport().unwrap();
+        handle.spawn({
+            let dispatch = multiplex::Server::new(service, transport).unwrap();
+            dispatch.map_err(|e| error!("error: {}", e))
+        });
+        tx2.send(mock).unwrap();
         lp.run(rx)
     });
-    let handle = rx2.recv().unwrap();
-
-    let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
-
-    let transport = new_transport.new_transport().wait().unwrap();
-    handle.spawn(|_| {
-        let dispatch = multiplex::Server::new(service, transport).unwrap();
-        dispatch.map_err(|e| error!("error: {}", e))
-    });
+    let mock = rx2.recv().unwrap();
 
     f(mock);
 
