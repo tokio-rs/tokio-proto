@@ -312,8 +312,8 @@ impl<T> Evented for Io<T> {
         let (registration, set_readiness) = Registration::new(poll, token, interest, opts);
         let inner = self.inner.lock().unwrap();
 
-        self.registration.fill(registration);
-        inner.set_readiness.fill(set_readiness);
+        self.registration.fill(registration).ok().unwrap();
+        inner.set_readiness.fill(set_readiness).ok().unwrap();
 
         inner.set_readiness();
 
