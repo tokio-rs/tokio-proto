@@ -17,7 +17,7 @@ type TransportHandle = mock::TransportHandle<Frame, Frame>;
 type Client = pipeline::Client<&'static str, &'static str, Body, io::Error>;
 
 // In frame
-type Frame = pipeline::Frame<&'static str, io::Error, u32>;
+type Frame = pipeline::Frame<&'static str, u32, io::Error>;
 
 // Body stream
 type Body = Receiver<u32, io::Error>;

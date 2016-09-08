@@ -17,8 +17,8 @@ type Msg = &'static str;
 type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
-type InFrame = Frame<Msg, io::Error, u32>;
-type OutFrame = Frame<multiplex::Message<Msg, Body>, io::Error, u32>;
+type InFrame = Frame<Msg, u32, io::Error>;
+type OutFrame = Frame<multiplex::Message<Msg, Body>, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {

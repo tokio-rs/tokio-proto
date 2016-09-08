@@ -37,9 +37,9 @@ pub struct Multiplex<S, T>
     // Glues the service with the pipeline task
     dispatch: S,
     // Buffer of pending messages for the dispatch
-    dispatch_deque: FrameDeque<Frame<T::Out, S::Error, T::BodyOut>>,
+    dispatch_deque: FrameDeque<Frame<T::Out, T::BodyOut, S::Error>>,
     // Storage for buffered frames
-    // frame_buf: FrameBuf<Frame<T::Out, S::Error, T::BodyOut>>,
+    // frame_buf: FrameBuf<Frame<T::Out, T::BodyOut, S::Error>>,
     // Temporary storage for RequestIds...
     // scratch: Vec<RequestId>,
 }
@@ -164,7 +164,7 @@ impl<S, T, E> Multiplex<S, T>
     }
     */
 
-    fn process_out_frame(&mut self, frame: Frame<T::Out, E, T::BodyOut>) -> io::Result<()> {
+    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, E>) -> io::Result<()> {
         trace!("Multiplex::process_out_frame");
         match frame {
             Frame::Message(id, out_message) => {

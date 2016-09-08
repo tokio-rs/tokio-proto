@@ -123,7 +123,7 @@ impl<S, T, E> Pipeline<S, T>
         true
     }
 
-    fn process_out_frame(&mut self, frame: Frame<T::Out, E, T::BodyOut>) -> io::Result<()> {
+    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, E>) -> io::Result<()> {
         trace!("process_out_frame");
         // At this point, the service & transport are ready to process the
         // frame, no matter what it is.

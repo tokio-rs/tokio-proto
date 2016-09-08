@@ -39,7 +39,7 @@ use take::Take;
 use std::{cmp, fmt, io, ops};
 
 /// A pipelined protocol frame
-pub enum Frame<T, E, B = ()> {
+pub enum Frame<T, B, E> {
     /// Either a request or a response
     Message(T),
     /// Returned by `Transport::read` when a streaming body will follow.
@@ -120,10 +120,10 @@ pub trait Transport: Readiness {
     type Error;
 
     /// Read a message from the `Transport`
-    fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::Error, Self::BodyOut>>>;
+    fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::BodyOut, Self::Error>>>;
 
     /// Write a message to the `Transport`
-    fn write(&mut self, req: Frame<Self::In, Self::Error, Self::BodyIn>) -> io::Result<Option<()>>;
+    fn write(&mut self, req: Frame<Self::In, Self::BodyIn, Self::Error>) -> io::Result<Option<()>>;
 
     /// Flush pending writes to the socket
     fn flush(&mut self) -> io::Result<Option<()>>;
@@ -166,7 +166,7 @@ pub trait NewTransport {
  *
  */
 
-impl<T, E, B> Frame<T, E, B> {
+impl<T, B, E> Frame<T, B, E> {
     /// Unwraps a frame, yielding the content of the `Message`.
     pub fn unwrap_msg(self) -> T {
         match self {
@@ -209,7 +209,7 @@ impl<T, E, B> Frame<T, E, B> {
     }
 }
 
-impl<T, E, B> fmt::Debug for Frame<T, E, B>
+impl<T, B, E> fmt::Debug for Frame<T, B, E>
     where T: fmt::Debug,
           E: fmt::Debug,
           B: fmt::Debug,
@@ -323,7 +323,7 @@ impl<S, Resp, Body, BodyStream> ServerService for S
  */
 
 impl<T, M1, M2, B1, B2, E> Transport for T
-    where T: ::io::Transport<In = Frame<M1, E, B1>, Out = Frame<M2, E, B2>>,
+    where T: ::io::Transport<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
 {
     type In = M1;
     type BodyIn = B1;
@@ -331,11 +331,11 @@ impl<T, M1, M2, B1, B2, E> Transport for T
     type BodyOut = B2;
     type Error = E;
 
-    fn read(&mut self) -> io::Result<Option<Frame<M2, E, B2>>> {
+    fn read(&mut self) -> io::Result<Option<Frame<M2, B2, E>>> {
         ::io::Transport::read(self)
     }
 
-    fn write(&mut self, req: Frame<M1, E, B1>) -> io::Result<Option<()>> {
+    fn write(&mut self, req: Frame<M1, B1, E>) -> io::Result<Option<()>> {
         ::io::Transport::write(self, req)
     }
 
