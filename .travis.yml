@@ -20,6 +20,9 @@ script:
   - RUST_BACKTRACE=1 cargo test
   - cargo doc --no-deps
 
+after_success:
+  - travis-cargo --only stable doc-upload
+
 env:
   global:
     secure: "ofFIYes5zrES6M83iNKsfpqRvOMBpJlOpBfz+sRXR6pkPleOckOY7kO2pKsrrcTO5cAFg2ZISiUHVPHCnSky2Zl/DV8OkC4Z+iIrg2yoHMestE6oxcMHkp9h1iNHsdr3FgTYd0dhduYaysiZKFFHc2mKwWiXF3Wqxn+ZwC0k2eggznwVo3ZGA0my3hE0bBFf+X3swhnmOtstUtnLRQySbNbauMACGnVxdVGFE+UXiWU+ZPCM47zvwATAhgeTMjLfn9UEvMG3kNxe2hm9M/hAPrHOeLcN2AfwuzIc5JTveyZkamZ3ciFQBzECJAasgiI+bSUSgKJeG3fuLl4AYNvC1dVqp38VHnZpJzRLMsTtGE3hbz8YHGGKWZtg0bMzxbvt0GTzKsB9RURljLxiY0icS52Pvg+kjDUFU437gEh4GAgXSUzc2KGfJVWc4ib6WmlnxDScryG0KiiLga9kkS6wX2BKIMLrAfTi+eyflaL2ZPo3Y8yJjC83oIFPELwpjj0RzR/NGKON11NH1HQc21DmM7cEjHUdIvXCgyHEDX+SR/vvZkVetYv8kt1nzI6GlYfGWsgNLA8kiPhXri2fKPZDw7asLz1hwNRvJhOsgAzIXjq9EZDz/s57fUREEj5aE9tqEfxlQUBtR8vS1pU9ROgPgx6FbgbdI5D8cZn8gQim7Mg="
