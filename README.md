@@ -3,7 +3,10 @@
 Tokio is a network application framework for rapid development and
 highly scalable production deployments of clients and servers.
 
-[API documentation](http://rust-doc.s3-website-us-east-1.amazonaws.com/tokio-proto/master/tokio_proto/)
+[![Build Status](https://travis-ci.org/tokio-rs/tokio-proto.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-proto)
+
+[Documentation](https://tokio-rs.github.io/tokio-proto) |
+[Gitter](https://gitter.im/tokio-rs/tokio)
 
 ## Usage
 
