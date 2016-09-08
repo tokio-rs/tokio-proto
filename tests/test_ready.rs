@@ -1,3 +1,5 @@
+extern crate tokio_proto;
+
 use tokio_proto::io::Ready;
 
 #[test]
