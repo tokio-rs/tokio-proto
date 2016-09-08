@@ -1,8 +1,9 @@
 use super::{multiplex, RequestId, Error, Message, ServerService, Transport};
 use futures::{Future, Poll, Async};
 use std::io;
-use std::collections::HashMap;
 
+/// A server `Task` that dispatches `Transport` messages to a `Service` using
+/// protocol multiplexing.
 pub struct Server<S, T>
     where S: ServerService,
           T: Transport,

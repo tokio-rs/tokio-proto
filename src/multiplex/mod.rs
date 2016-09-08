@@ -30,8 +30,6 @@
 //! As of now, the implementation only supports multiplexed requests &
 //! responses without streaming bodies.
 
-#![allow(missing_docs, warnings)]
-
 mod frame_buf;
 mod multiplex;
 mod server;
@@ -178,6 +176,7 @@ pub trait NewTransport {
  */
 
 impl<T, E, B> Frame<T, E, B> {
+    /// Return the request ID associated with the frame.
     pub fn request_id(&self) -> Option<RequestId> {
         match *self {
             Frame::Message(id, _) => Some(id),

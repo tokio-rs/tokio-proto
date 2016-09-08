@@ -1,9 +1,8 @@
 use super::{Frame, Message, Error, RequestId, Transport};
 use super::frame_buf::{FrameBuf, FrameDeque};
 use futures::{Future, Poll, Async};
-use futures::stream::{Stream, Sender, FutureSender};
+use futures::stream::{Stream};
 use std::io;
-use std::collections::HashMap;
 
 /*
  * TODO:
@@ -30,9 +29,9 @@ pub struct Multiplex<S, T>
     // The transport wrapping the connection.
     transport: T,
     // The `Sender` for the in-flight request body streams
-    out_bodies: HashMap<RequestId, BodySender<T::BodyOut, S::Error>>,
+    // out_bodies: HashMap<RequestId, BodySender<T::BodyOut, S::Error>>,
     // The in-flight response body streams
-    in_bodies: HashMap<RequestId, S::InBodyStream>,
+    // in_bodies: HashMap<RequestId, S::InBodyStream>,
     // True when the transport is fully flushed
     is_flushed: bool,
     // Glues the service with the pipeline task
@@ -40,9 +39,9 @@ pub struct Multiplex<S, T>
     // Buffer of pending messages for the dispatch
     dispatch_deque: FrameDeque<Frame<T::Out, S::Error, T::BodyOut>>,
     // Storage for buffered frames
-    frame_buf: FrameBuf<Frame<T::Out, S::Error, T::BodyOut>>,
+    // frame_buf: FrameBuf<Frame<T::Out, S::Error, T::BodyOut>>,
     // Temporary storage for RequestIds...
-    scratch: Vec<RequestId>,
+    // scratch: Vec<RequestId>,
 }
 
 /// Dispatch messages from the transport to the service
@@ -73,10 +72,12 @@ pub trait Dispatch {
     fn has_in_flight(&self) -> bool;
 }
 
+/*
 enum BodySender<B, E> {
     Ready(Sender<B, E>),
     Busy(FutureSender<B, E>, FrameDeque<Option<B>>),
 }
+*/
 
 /*
  *
@@ -97,13 +98,13 @@ impl<S, T, E> Multiplex<S, T>
         Ok(Multiplex {
             run: true,
             transport: transport,
-            out_bodies: HashMap::new(),
-            in_bodies: HashMap::new(),
+            // out_bodies: HashMap::new(),
+            // in_bodies: HashMap::new(),
             is_flushed: true,
             dispatch: dispatch,
             dispatch_deque: frame_buf.deque(),
-            frame_buf: frame_buf,
-            scratch: vec![],
+            // frame_buf: frame_buf,
+            // scratch: vec![],
         })
     }
 
@@ -144,6 +145,7 @@ impl<S, T, E> Multiplex<S, T>
         Ok(())
     }
 
+    /*
     fn flush_out_bodies(&mut self) -> io::Result<()> {
         self.scratch.clear();
 
@@ -160,6 +162,7 @@ impl<S, T, E> Multiplex<S, T>
 
         Ok(())
     }
+    */
 
     fn process_out_frame(&mut self, frame: Frame<T::Out, E, T::BodyOut>) -> io::Result<()> {
         trace!("Multiplex::process_out_frame");
@@ -183,13 +186,13 @@ impl<S, T, E> Multiplex<S, T>
                     self.dispatch_deque.push(Frame::Message(id, out_message));
                 }
             }
-            Frame::MessageWithBody(id, out_message, body_sender) => {
+            Frame::MessageWithBody(_id, _out_message, _body_sender) => {
                 unimplemented!();
             }
-            Frame::Body(id, Some(chunk)) => {
+            Frame::Body(_id, Some(_chunk)) => {
                 unimplemented!();
             }
-            Frame::Body(id, None) => {
+            Frame::Body(_id, None) => {
                 unimplemented!();
             }
             Frame::Done => {
@@ -225,7 +228,7 @@ impl<S, T, E> Multiplex<S, T>
                 trace!("got in_flight value with body");
                 try!(self.transport.write(Frame::Message(id, val)));
             }
-            Ok(Message::WithBody(val, body)) => {
+            Ok(Message::WithBody(_val, _body)) => {
                 unimplemented!();
             }
             Err(e) => {
@@ -302,6 +305,7 @@ impl<S, T, E> Future for Multiplex<S, T>
  *
  */
 
+/*
 impl<B, E> BodySender<B, E> {
     fn flush(&mut self) -> bool {
         let ready_sender;
@@ -347,3 +351,4 @@ impl<B, E> BodySender<B, E> {
         false
     }
 }
+*/

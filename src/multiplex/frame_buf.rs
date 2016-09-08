@@ -22,7 +22,7 @@ pub struct FrameDeque<T> {
 
 const MAX_BLOCKS: usize = 16;
 const INITIAL_BLOCK_SIZE: usize = 32;
-const MAX_CAPACITY: usize = INITIAL_BLOCK_SIZE * 2 ^ MAX_BLOCKS;
+const MAX_CAPACITY: usize = 1_048_576;
 
 struct Inner<T> {
     // Max number of elements that can be stored
@@ -43,14 +43,20 @@ struct Slot<T> {
 impl<T> FrameBuf<T> {
     /// Return a new `FrameBuf` with the given capacity
     pub fn with_capacity(capacity: usize) -> FrameBuf<T> {
+        assert!(capacity < MAX_CAPACITY,
+                "requested frame buffer capacity too large; max={}; requested={}",
+                MAX_CAPACITY, capacity);
+
         let inner = UnsafeCell::new(Inner::with_capacity(capacity));
         FrameBuf { inner: Rc::new(inner) }
     }
 
+    #[cfg(test)]
     pub fn capacity(&self) -> usize {
         unsafe { &*self.inner.get() }.max_capacity
     }
 
+    #[cfg(test)]
     pub fn allocated(&self) -> usize {
         unsafe { &*self.inner.get() }.allocated
     }
@@ -190,7 +196,6 @@ impl<T> Inner<T> {
         debug_assert!(self.allocated & self.allocated - 1 == 0);
 
         let new_block_cap = self.allocated;
-        let idx = self.blocks.len();
 
         // Push the new block
         self.blocks.push(Vec::with_capacity(new_block_cap));
@@ -202,7 +207,7 @@ impl<T> Inner<T> {
 
 #[cfg(test)]
 mod test {
-    use super::{FrameBuf, FrameDeque};
+    use super::{FrameBuf};
 
     #[test]
     fn test_capacity() {

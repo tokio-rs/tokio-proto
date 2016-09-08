@@ -1,5 +1,5 @@
-use futures::stream::{self, Stream, Receiver};
-use futures::{Future, failed, finished, oneshot};
+use futures::stream::{Receiver};
+use futures::{Future, finished, oneshot};
 use support::{self, mock};
 use tokio_proto::multiplex::{self, RequestId, Frame, Message};
 use tokio_proto;
