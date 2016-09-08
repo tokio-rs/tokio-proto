@@ -62,18 +62,22 @@ impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
           ReqBody: Stream<Error = E>,
           E: From<Error<E>> + Send + 'static,
 {
-    type Req = Message<Req, ReqBody>;
-    type Resp = Resp;
+    type Request = Message<Req, ReqBody>;
+    type Response = Resp;
     type Error = E;
-    type Fut = BoxFuture<Self::Resp, E>;
+    type Future = BoxFuture<Self::Response, E>;
 
-    fn call(&self, request: Self::Req) -> Self::Fut {
+    fn call(&self, request: Self::Request) -> Self::Future {
         let (tx, rx) = futures::oneshot();
 
         // TODO: handle error
         self.tx.send((request, tx)).ok().unwrap();
 
         rx.then(|t| t.unwrap()).boxed()
+    }
+
+    fn poll_ready(&self) -> Async<()> {
+        Async::Ready(())
     }
 }
 

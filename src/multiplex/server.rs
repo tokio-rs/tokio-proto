@@ -14,7 +14,7 @@ pub struct Server<S, T>
 struct Dispatch<S: ServerService> {
     // The service handling the connection
     service: S,
-    in_flight: Vec<(RequestId, InFlight<S::Fut>)>,
+    in_flight: Vec<(RequestId, InFlight<S::Future>)>,
 }
 
 enum InFlight<F: Future> {
@@ -33,7 +33,7 @@ const MAX_IN_FLIGHT_REQUESTS: usize = 32;
 
 impl<T, S, E> Server<S, T>
     where T: Transport<Error = E>,
-          S: ServerService<Req = T::Out, Resp = T::In, Body = T::BodyIn, Error = E>,
+          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
           E: From<Error<E>>,
 {
     /// Create a new pipeline `Server` dispatcher with the given service and
@@ -55,10 +55,10 @@ impl<T, S, E> Server<S, T>
 impl<S> multiplex::Dispatch for Dispatch<S>
     where S: ServerService,
 {
-    type InMsg = S::Resp;
+    type InMsg = S::Response;
     type InBody = S::Body;
     type InBodyStream = S::BodyStream;
-    type OutMsg = S::Req;
+    type OutMsg = S::Request;
     type Error = S::Error;
 
     fn dispatch(&mut self, request_id: RequestId, request: Self::OutMsg) -> io::Result<()> {
@@ -98,7 +98,7 @@ impl<S> multiplex::Dispatch for Dispatch<S>
 
 impl<T, S, E> Future for Server<S, T>
     where T: Transport<Error = E>,
-          S: ServerService<Req = T::Out, Resp = T::In, Body = T::BodyIn, Error = E>,
+          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
           E: From<Error<E>>,
 {
     type Item = ();

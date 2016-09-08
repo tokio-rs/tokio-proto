@@ -334,8 +334,12 @@ fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
 /// Setup a reactor running a multiplex::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: multiplex::ServerService<Req = multiplex::Message<Msg, Body>, Resp = Msg, Body = u32, BodyStream = Body, Error = io::Error> + Send + 'static,
-          S::Fut: Send + 'static,
+    where S: multiplex::ServerService<Request = multiplex::Message<Msg, Body>,
+                                     Response = Msg,
+                                         Body = u32,
+                                   BodyStream = Body,
+                                        Error = io::Error> + Send + 'static,
+          S::Future: Send + 'static,
           F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),
 {
     drop(::env_logger::init());

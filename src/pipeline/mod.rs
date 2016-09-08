@@ -77,10 +77,10 @@ pub enum Error<E> {
 /// `Service` should be implemented instead of this trait.
 pub trait ServerService {
     /// Requests handled by the service.
-    type Req;
+    type Request;
 
     /// Responses given by the service.
-    type Resp;
+    type Response;
 
     /// Response body chunk
     type Body;
@@ -92,10 +92,10 @@ pub trait ServerService {
     type Error;
 
     /// The future response value.
-    type Fut: Future<Item = Message<Self::Resp, Self::BodyStream>, Error = Self::Error>;
+    type Future: Future<Item = Message<Self::Response, Self::BodyStream>, Error = Self::Error>;
 
     /// Process the request and return the response asynchronously.
-    fn call(&self, req: Self::Req) -> Self::Fut;
+    fn call(&self, req: Self::Request) -> Self::Future;
 }
 
 /// A specialization of `io::Transport` supporting the requirements of
@@ -305,18 +305,18 @@ impl<T, B> fmt::Debug for Message<T, B>
  *
  */
 
-impl<S, Resp, Body, BodyStream> ServerService for S
-    where S: Service<Resp = Message<Resp, BodyStream>>,
+impl<S, Response, Body, BodyStream> ServerService for S
+    where S: Service<Response = Message<Response, BodyStream>>,
           BodyStream: Stream<Item = Body, Error = S::Error>,
 {
-    type Req = S::Req;
-    type Resp = Resp;
+    type Request = S::Request;
+    type Response = Response;
     type Body = Body;
     type BodyStream = BodyStream;
     type Error = S::Error;
-    type Fut = S::Fut;
+    type Future = S::Future;
 
-    fn call(&self, req: Self::Req) -> Self::Fut {
+    fn call(&self, req: Self::Request) -> Self::Future {
         Service::call(self, req)
     }
 }

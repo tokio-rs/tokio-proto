@@ -6,16 +6,16 @@ use tokio_service::Service;
 pub trait NewService {
 
     /// Requests handled by the service
-    type Req;
+    type Request;
 
     /// Responses given by the service
-    type Resp;
+    type Response;
 
     /// Errors produced by the service
     type Error;
 
     /// The `Service` value created by this factory
-    type Item: Service<Req = Self::Req, Resp = Self::Resp, Error = Self::Error>;
+    type Item: Service<Request = Self::Request, Response = Self::Response, Error = Self::Error>;
 
     /// Create and return a new service value.
     fn new_service(&self) -> io::Result<Self::Item>;
@@ -25,8 +25,8 @@ impl<T> NewService for T
     where T: Service + Clone,
 {
     type Item = T;
-    type Req = T::Req;
-    type Resp = T::Resp;
+    type Request = T::Request;
+    type Response = T::Response;
     type Error = T::Error;
 
     fn new_service(&self) -> io::Result<T> {
