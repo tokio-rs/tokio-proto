@@ -12,22 +12,18 @@ matrix:
   allow_failures:
     - rust: nightly
 
+before_script:
+  - pip install 'travis-cargo<0.2' --user && export PATH=$HOME/.local/bin:$PATH
+
 script:
+  - cargo build
   - RUST_BACKTRACE=1 cargo test
   - cargo doc --no-deps
 
-deploy:
-  provider: s3
-  access_key_id: AKIAISVZFP2MDUU6KA5A
-  secret_access_key:
-    secure: "FzgNvjHNszNPkFY/mzTVebMe3l2aHKYAf+GzFi6KfPzp4T7WDPhg3KuDhbtdxmX7WBsiB6ACcxhb32c8Cp0otHTVwXrWFbE3KLaHqbPhH1KIfjemlKrnwhhtjLPdzS23y/KhI7N5dIlAGo99knL0W3csxx8tksyg7MebR2je3lUemrJhNd3Ko03+A/5G+1YvECyytpyCL74RwIWr/JwxTTkTIEkbzJ9qbkUlo+mCD+bOT9DMFRqmz4fV2wndcAHvAGN5fyW3b47o6huxffRXD44eldXgPRAsRO2JC3Be4pxvwaTpWIVfJ7GrZdcvZDxiYouUXsS7b91/754fzjruBruoBtICifjjHQRdDLVZOGBxvof40pGUZOTscvauvVxx21qnIfUfTy2f1yx65UAjsuFLYzG1g96qnIZV1Hz/UvGcUD58ejsfyYE5A2Lyj+OonMwnzjBuHAC65jS7QFfWbS05vwlZJTRnK2GKSQprcm/BYTLn7UKU/uCC2kzuokkEH30j7qvusIpuzLIMv3zDl7pLiuPlXnrzbAtg9F9oghvAeOK4sToJAIK/HJvJiFwsaO1QXBgCqelHBG00G3Q6EhBREjvxM4mcdl2FgIc5x8RaNTIuCdxn/tVyaKyvsRu79sg4fyu4q1urpApG5/SsypwQxQg9cF4h6JzpRHoM1UE="
-  bucket: rust-doc
-  skip_cleanup: true
-  local-dir: target/doc
-  upload-dir: tokio-proto/${TRAVIS_BRANCH}
-  acl: public_read
-  on:
-    condition: $TRAVIS_RUST_VERSION == "1.10.0" && $TRAVIS_OS_NAME == "linux"
-    repo: tokio-rs/tokio-proto
-    branch:
-      - master
+env:
+  global:
+    secure: "ofFIYes5zrES6M83iNKsfpqRvOMBpJlOpBfz+sRXR6pkPleOckOY7kO2pKsrrcTO5cAFg2ZISiUHVPHCnSky2Zl/DV8OkC4Z+iIrg2yoHMestE6oxcMHkp9h1iNHsdr3FgTYd0dhduYaysiZKFFHc2mKwWiXF3Wqxn+ZwC0k2eggznwVo3ZGA0my3hE0bBFf+X3swhnmOtstUtnLRQySbNbauMACGnVxdVGFE+UXiWU+ZPCM47zvwATAhgeTMjLfn9UEvMG3kNxe2hm9M/hAPrHOeLcN2AfwuzIc5JTveyZkamZ3ciFQBzECJAasgiI+bSUSgKJeG3fuLl4AYNvC1dVqp38VHnZpJzRLMsTtGE3hbz8YHGGKWZtg0bMzxbvt0GTzKsB9RURljLxiY0icS52Pvg+kjDUFU437gEh4GAgXSUzc2KGfJVWc4ib6WmlnxDScryG0KiiLga9kkS6wX2BKIMLrAfTi+eyflaL2ZPo3Y8yJjC83oIFPELwpjj0RzR/NGKON11NH1HQc21DmM7cEjHUdIvXCgyHEDX+SR/vvZkVetYv8kt1nzI6GlYfGWsgNLA8kiPhXri2fKPZDw7asLz1hwNRvJhOsgAzIXjq9EZDz/s57fUREEj5aE9tqEfxlQUBtR8vS1pU9ROgPgx6FbgbdI5D8cZn8gQim7Mg="
+
+notifications:
+  email:
+    on_success: never
