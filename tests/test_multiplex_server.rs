@@ -1,6 +1,7 @@
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
+extern crate tokio_service;
 extern crate rand;
 
 #[macro_use]
@@ -32,7 +33,7 @@ type OutFrame = Frame<multiplex::Message<Msg, Body>, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         finished(req)
     });
 
@@ -44,7 +45,7 @@ fn test_immediate_done() {
 
 #[test]
 fn test_immediate_writable_echo() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
         finished((req))
     });
@@ -67,7 +68,7 @@ fn test_immediate_writable_delayed_response_echo() {
     let (c, fut) = oneshot();
     let fut = Mutex::new(Some(fut));
 
-    let service = tokio_proto::simple_service(move |req| {
+    let service = tokio_service::simple_service(move |req| {
         assert_eq!(req, "hello");
         fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
@@ -90,7 +91,7 @@ fn test_immediate_writable_delayed_response_echo() {
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
         finished((req))
     });
@@ -112,7 +113,7 @@ fn test_delayed_writable_immediate_response_echo() {
 fn test_same_order_multiplexing() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
         fut.then(|r| r.unwrap())
@@ -154,7 +155,7 @@ fn test_same_order_multiplexing() {
 fn test_out_of_order_multiplexing() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
         fut.then(|r| r.unwrap())
@@ -199,7 +200,7 @@ fn test_out_of_order_multiplexing() {
 fn test_multiplexing_while_transport_not_writable() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |req: Message<&'static str, Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
         finished(req)
     });
@@ -229,7 +230,7 @@ fn test_multiplexing_while_transport_not_writable() {
 
 #[test]
 fn test_repeatedly_flushes_messages() {
-    let service = tokio_proto::simple_service(move |req| {
+    let service = tokio_service::simple_service(move |req| {
         finished(req)
     });
 
@@ -257,7 +258,7 @@ fn test_reaching_max_in_flight_requests() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = c1.clone();
 
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         c2.fetch_add(1, Ordering::Relaxed);
         let fut = rx.lock().unwrap().recv().unwrap();
         fut.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))

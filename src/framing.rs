@@ -2,7 +2,8 @@
 
 use futures::Async;
 use tokio_core::io::Io;
-use io::{Transport, TryRead, TryWrite};
+use Transport;
+use io::{TryRead, TryWrite};
 use bytes::{alloc, MutBuf, BlockBuf, Source};
 use std::io;
 

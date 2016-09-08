@@ -6,7 +6,7 @@ use futures::{self, Future, BoxFuture, Complete, Async};
 use tokio_core::reactor::Handle;
 use tokio_core::channel::{channel, Sender, Receiver};
 
-use Service;
+use tokio_service::Service;
 use super::{pipeline, Error, Message, Transport, NewTransport};
 
 /// Client `Service` for the pipeline protocol.

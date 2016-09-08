@@ -1,6 +1,7 @@
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
+extern crate tokio_service;
 extern crate rand;
 
 #[macro_use]
@@ -12,7 +13,7 @@ mod support;
 use futures::stream::{self, Receiver};
 use futures::{Future, oneshot};
 use support::mock;
-use tokio_proto::Service;
+use tokio_service::Service;
 use tokio_proto::pipeline;
 use tokio_core::reactor::Core;
 use std::io;

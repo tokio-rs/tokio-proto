@@ -1,6 +1,6 @@
 use std::io;
 
-pub use tokio_service::{Service, SimpleService, simple_service};
+use tokio_service::Service;
 
 /// Creates new `Service` values.
 pub trait NewService {

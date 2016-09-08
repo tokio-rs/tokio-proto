@@ -155,7 +155,7 @@ impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
     }
 }
 
-impl<In, Out> ::tokio_proto::io::Transport for Transport<In, Out>
+impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
     where In: fmt::Debug,
 {
     type In = In;

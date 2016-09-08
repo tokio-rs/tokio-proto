@@ -14,11 +14,16 @@ extern crate tokio_service;
 #[macro_use]
 extern crate log;
 
-pub mod io;
 pub mod multiplex;
 pub mod pipeline;
 pub mod server;
 
+mod framing;
+mod io;
 mod service;
+mod transport;
 
-pub use self::service::{Service, NewService, SimpleService, simple_service};
+pub use framing::{Framed, Parse, Serialize};
+pub use io::{TryRead, TryWrite};
+pub use service::{NewService};
+pub use transport::Transport;

@@ -1,6 +1,7 @@
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
+extern crate tokio_service;
 extern crate rand;
 
 #[macro_use]
@@ -30,7 +31,7 @@ type OutFrame = Frame<pipeline::Message<Msg, Body>, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         finished(req)
     });
 
@@ -42,7 +43,7 @@ fn test_immediate_done() {
 
 #[test]
 fn test_immediate_writable_echo() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
         finished((req))
     });
@@ -62,7 +63,7 @@ fn test_immediate_writable_delayed_response_echo() {
     let (c, fut) = oneshot();
     let fut = Mutex::new(Some(fut));
 
-    let service = tokio_proto::simple_service(move |req| {
+    let service = tokio_service::simple_service(move |req| {
         assert_eq!(req, "hello");
         fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
@@ -83,7 +84,7 @@ fn test_immediate_writable_delayed_response_echo() {
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
-    let service = tokio_proto::simple_service(|req| {
+    let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
         finished((req))
     });
@@ -102,7 +103,7 @@ fn test_delayed_writable_immediate_response_echo() {
 fn test_pipelining_while_service_is_processing() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
         fut.then(|r| r.unwrap())
@@ -140,7 +141,7 @@ fn test_pipelining_while_service_is_processing() {
 fn test_pipelining_while_transport_not_writable() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |req: Message<&'static str, Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
         finished(req)
     });
@@ -169,7 +170,7 @@ fn test_pipelining_while_transport_not_writable() {
 
 #[test]
 fn test_repeatedly_flushes_messages() {
-    let service = tokio_proto::simple_service(move |req| {
+    let service = tokio_service::simple_service(move |req| {
         finished(req)
     });
 
@@ -189,7 +190,7 @@ fn test_repeatedly_flushes_messages() {
 
 #[test]
 fn test_returning_error_from_service() {
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         failed(io::Error::new(io::ErrorKind::Other, "nope"))
     });
 
@@ -208,7 +209,7 @@ fn test_returning_error_from_service() {
 
 #[test]
 fn test_reading_error_frame_from_transport() {
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         finished(Message::WithoutBody("omg no"))
     });
 
@@ -220,7 +221,7 @@ fn test_reading_error_frame_from_transport() {
 
 #[test]
 fn test_reading_io_error_from_transport() {
-    let service = tokio_proto::simple_service(move |_| {
+    let service = tokio_service::simple_service(move |_| {
         finished(Message::WithoutBody("omg no"))
     });
 
@@ -246,7 +247,7 @@ fn test_returning_would_block_from_service() {
 fn test_streaming_request_body_then_responding() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |mut req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |mut req: Message<&'static str, Body>| {
         assert_eq!(req, "omg");
 
         let body = req.take_body().unwrap();
@@ -282,7 +283,7 @@ fn test_streaming_request_body_then_responding() {
 fn test_responding_then_streaming_request_body() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |mut req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |mut req: Message<&'static str, Body>| {
         assert_eq!(req, "omg");
 
         let body = req.take_body().unwrap();
@@ -323,7 +324,7 @@ fn test_responding_then_streaming_request_body() {
 fn test_pipeline_streaming_body_without_consuming() {
     let (tx, rx) = channel();
 
-    let service = tokio_proto::simple_service(move |mut req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |mut req: Message<&'static str, Body>| {
         let body = req.take_body().unwrap();
 
         if req == "one" {
@@ -384,7 +385,7 @@ fn test_streaming_response_body() {
     let (tx, rx) = stream::channel::<u32, io::Error>();
     let rx = Mutex::new(Some(rx));
 
-    let service = tokio_proto::simple_service(move |req| {
+    let service = tokio_service::simple_service(move |req| {
         assert_eq!(req, "omg");
         finished(Message::WithBody("hi2u", rx.lock().unwrap().take().unwrap()))
     });

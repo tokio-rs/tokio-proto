@@ -37,3 +37,4 @@ pub trait Transport {
     /// source.
     fn flush(&mut self) -> io::Result<Option<()>>;
 }
+

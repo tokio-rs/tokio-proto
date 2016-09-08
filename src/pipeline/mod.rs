@@ -31,7 +31,7 @@ mod pipeline;
 pub use self::client::{connect, Client};
 pub use self::server::Server;
 
-use Service;
+use tokio_service::Service;
 use futures::{Async, Future};
 use futures::stream::{Stream, Sender};
 use take::Take;
@@ -328,7 +328,7 @@ impl<S, Resp, Body, BodyStream> ServerService for S
  */
 
 impl<T, M1, M2, B1, B2, E> Transport for T
-    where T: ::io::Transport<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
+    where T: ::Transport<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
 {
     type In = M1;
     type BodyIn = B1;
@@ -337,23 +337,23 @@ impl<T, M1, M2, B1, B2, E> Transport for T
     type Error = E;
 
     fn poll_read(&mut self) -> Async<()> {
-        ::io::Transport::poll_read(self)
+        ::Transport::poll_read(self)
     }
 
     fn read(&mut self) -> io::Result<Option<Frame<M2, B2, E>>> {
-        ::io::Transport::read(self)
+        ::Transport::read(self)
     }
 
     fn poll_write(&mut self) -> Async<()> {
-        ::io::Transport::poll_write(self)
+        ::Transport::poll_write(self)
     }
 
     fn write(&mut self, req: Frame<M1, B1, E>) -> io::Result<Option<()>> {
-        ::io::Transport::write(self, req)
+        ::Transport::write(self, req)
     }
 
     fn flush(&mut self) -> io::Result<Option<()>> {
-        ::io::Transport::flush(self)
+        ::Transport::flush(self)
     }
 }
 
