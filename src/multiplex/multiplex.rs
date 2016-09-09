@@ -119,7 +119,7 @@ impl<S, T, E> Multiplex<S, T>
         while self.run {
             // TODO: Only read frames if there is available space in the frame
             // buffer
-            if let Some(frame) = try!(self.transport.read()) {
+            if let Async::Ready(frame) = try!(self.transport.read()) {
                 try!(self.process_out_frame(frame));
             } else {
                 break;
@@ -241,7 +241,7 @@ impl<S, T, E> Multiplex<S, T>
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.is_flushed = try!(self.transport.flush()).is_some();
+        self.is_flushed = try!(self.transport.flush()).is_ready();
         Ok(())
     }
 }

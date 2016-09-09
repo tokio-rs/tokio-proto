@@ -21,9 +21,7 @@ pub mod server;
 mod framing;
 mod io;
 mod service;
-mod transport;
 
 pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};
 pub use service::{NewService};
-pub use transport::Transport;

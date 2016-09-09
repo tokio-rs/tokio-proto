@@ -1,13 +1,12 @@
 #![allow(warnings)]
 
-use futures::Async;
-use tokio_core::io::Io;
-use Transport;
+use futures::{Async, Poll};
+use tokio_core::io::{Io, FramedIo};
 use io::{TryRead, TryWrite};
 use bytes::{alloc, MutBuf, BlockBuf, Source};
 use std::io;
 
-/// Transport handling frame encoding and decoding.
+/// FramedIo handling frame encoding and decoding.
 pub struct Framed<T, P, S> {
     upstream: T,
     parse: P,
@@ -69,7 +68,7 @@ impl<T, P, S> Framed<T, P, S>
     }
 }
 
-impl<T, P, S> Transport for Framed<T, P, S>
+impl<T, P, S> FramedIo for Framed<T, P, S>
     where T: Io,
           P: Parse,
           S: Serialize,
@@ -85,7 +84,7 @@ impl<T, P, S> Transport for Framed<T, P, S>
         }
     }
 
-    fn read(&mut self) -> io::Result<Option<Self::Out>> {
+    fn read(&mut self) -> Poll<Self::Out, io::Error> {
         loop {
             // If the read buffer has any pending data, then it could be
             // possible that `parse` will return a new frame. We leave it to
@@ -95,7 +94,7 @@ impl<T, P, S> Transport for Framed<T, P, S>
                 if let Some(frame) = self.parse.parse(&mut self.rd) {
                     trace!("frame parsed from buffer");
                     self.is_readable = true;
-                    return Ok(Some(frame));
+                    return Ok(Async::Ready(frame));
                 }
 
                 self.is_readable = false;
@@ -107,12 +106,17 @@ impl<T, P, S> Transport for Framed<T, P, S>
             match try!(self.upstream.try_read_buf(&mut self.rd)) {
                 Some(0) => {
                     trace!("read 0 bytes");
-                    return Ok(self.parse.done(&mut self.rd));
+
+                    if let Some(v) = self.parse.done(&mut self.rd) {
+                        return Ok(Async::Ready(v));
+                    }
+
+                    return Ok(Async::NotReady);
                 }
                 Some(_) => {}
                 None => {
                     trace!("upstream Transport::read returned would-block");
-                    return Ok(None);
+                    return Ok(Async::NotReady);
                 }
             }
         }
@@ -126,7 +130,7 @@ impl<T, P, S> Transport for Framed<T, P, S>
         Async::Ready(())
     }
 
-    fn write(&mut self, msg: Self::In) -> io::Result<Option<()>> {
+    fn write(&mut self, msg: Self::In) -> Poll<(), io::Error> {
         if !self.poll_write().is_ready() {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "transport not currently writable"));
         }
@@ -139,10 +143,10 @@ impl<T, P, S> Transport for Framed<T, P, S>
         //
         // TODO: A better solution may be to wait until a block in the
         // `BlockBuf` is full and then flush that block immediately.
-        Ok(None)
+        Ok(Async::NotReady)
     }
 
-    fn flush(&mut self) -> io::Result<Option<()>> {
+    fn flush(&mut self) -> Poll<(), io::Error> {
         // Try flushing the underlying IO
         let _ = try!(self.upstream.try_flush());
 
@@ -151,14 +155,14 @@ impl<T, P, S> Transport for Framed<T, P, S>
         loop {
             if self.wr.is_empty() {
                 trace!("framed transport flushed");
-                return Ok(Some(()));
+                return Ok(Async::Ready(()));
             }
 
             trace!("writing; remaining={:?}", self.wr.len());
 
             match self.upstream.try_write_buf(&mut self.wr.buf()) {
                 Ok(Some(n)) => self.wr.drop(n),
-                Ok(None) => return Ok(None),
+                Ok(None) => return Ok(Async::NotReady),
                 Err(e) => {
                     trace!("framed transport flush error; err={:?}", e);
                     return Err(e);

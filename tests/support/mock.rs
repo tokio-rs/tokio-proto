@@ -2,9 +2,10 @@ extern crate futures;
 extern crate lazycell;
 extern crate mio;
 
-use self::futures::Async;
+use self::futures::{Async, Poll};
 use self::lazycell::LazyCell;
 use self::mio::{Evented, Ready, PollOpt, Registration, SetReadiness, Token};
+use tokio_core::io::FramedIo;
 use tokio_core::reactor::{PollEvented, Handle};
 use std::{fmt, io};
 use std::sync::{Arc, Mutex};
@@ -155,7 +156,7 @@ impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
     }
 }
 
-impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
+impl<In, Out> FramedIo for Transport<In, Out>
     where In: fmt::Debug,
 {
     type In = In;
@@ -165,14 +166,14 @@ impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
         self.source.poll_read()
     }
 
-    /// Read a message frame from the `Transport`
-    fn read(&mut self) -> io::Result<Option<Out>> {
+    /// Read a message frame from the `FramedIo`
+    fn read(&mut self) -> Poll<Out, io::Error> {
         match self.source.get_ref().inner.lock().unwrap().recv() {
-            Some(Ok(v)) => Ok(Some(v)),
+            Some(Ok(v)) => Ok(Async::Ready(v)),
             Some(Err(e)) => Err(e),
             None => {
                 self.source.need_read();
-                Ok(None)
+                Ok(Async::NotReady)
             }
         }
     }
@@ -181,8 +182,8 @@ impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
         self.source.poll_write()
     }
 
-    /// Write a message frame to the `Transport`
-    fn write(&mut self, req: In) -> io::Result<Option<()>> {
+    /// Write a message frame to the `FramedIo`
+    fn write(&mut self, req: In) -> Poll<(), io::Error> {
         if !self.poll_write().is_ready() {
             panic!("cannot write request when not writable");
         }
@@ -193,13 +194,13 @@ impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
         self.flush()
     }
 
-    fn flush(&mut self) -> io::Result<Option<()>> {
+    fn flush(&mut self) -> Poll<(), io::Error> {
         if !self.source.poll_write().is_ready() {
-            return Ok(None)
+            return Ok(Async::NotReady)
         }
 
         if self.pending.is_none() {
-            return Ok(Some(()));
+            return Ok(Async::Ready(()));
         }
 
         trace!("transport flush");
@@ -214,13 +215,13 @@ impl<In, Out> ::tokio_proto::Transport for Transport<In, Out>
                 WriteCap::Write => {
                     let val = self.pending.take().unwrap();
                     self.tx.send(Write::Write(val)).unwrap();
-                    return Ok(Some(()));
+                    return Ok(Async::Ready(()));
                 }
             }
         }
 
         self.source.need_write();
-        Ok(None)
+        Ok(Async::NotReady)
     }
 }
 

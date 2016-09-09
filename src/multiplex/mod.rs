@@ -36,8 +36,9 @@ mod server;
 
 pub use self::server::Server;
 
+use tokio_core::io::FramedIo;
 use tokio_service::{Service};
-use futures::{Async, Future};
+use futures::{Async, Future, Poll};
 use futures::stream::{Stream, Sender, Empty};
 use take::Take;
 use std::{fmt, cmp, io, ops};
@@ -131,16 +132,16 @@ pub trait Transport {
     fn poll_read(&mut self) -> Async<()>;
 
     /// Read a message from the `Transport`
-    fn read(&mut self) -> io::Result<Option<Frame<Self::Out, Self::BodyOut, Self::Error>>>;
+    fn read(&mut self) -> Poll<Frame<Self::Out, Self::BodyOut, Self::Error>, io::Error>;
 
     /// Tests to see if this I/O object may be writable.
     fn poll_write(&mut self) -> Async<()>;
 
     /// Write a message to the `Transport`
-    fn write(&mut self, req: Frame<Self::In, Self::BodyIn, Self::Error>) -> io::Result<Option<()>>;
+    fn write(&mut self, req: Frame<Self::In, Self::BodyIn, Self::Error>) -> Poll<(), io::Error>;
 
     /// Flush pending writes to the socket
-    fn flush(&mut self) -> io::Result<Option<()>>;
+    fn flush(&mut self) -> Poll<(), io::Error>;
 }
 
 /// A specialization of `io::NewTransport` supporting the requirements of
@@ -348,7 +349,7 @@ impl<S, Response, Body, BodyStream> ServerService for S
  */
 
 impl<T, M1, M2, B1, B2, E> Transport for T
-    where T: ::Transport<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
+    where T: FramedIo<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
 {
     type In = M1;
     type BodyIn = B1;
@@ -357,23 +358,23 @@ impl<T, M1, M2, B1, B2, E> Transport for T
     type Error = E;
 
     fn poll_read(&mut self) -> Async<()> {
-        ::Transport::poll_read(self)
+        FramedIo::poll_read(self)
     }
 
-    fn read(&mut self) -> io::Result<Option<Frame<M2, B2, E>>> {
-        ::Transport::read(self)
+    fn read(&mut self) -> Poll<Frame<M2, B2, E>, io::Error> {
+        FramedIo::read(self)
     }
 
     fn poll_write(&mut self) -> Async<()> {
-        ::Transport::poll_write(self)
+        FramedIo::poll_write(self)
     }
 
-    fn write(&mut self, req: Frame<M1, B1, E>) -> io::Result<Option<()>> {
-        ::Transport::write(self, req)
+    fn write(&mut self, req: Frame<M1, B1, E>) -> Poll<(), io::Error> {
+        FramedIo::write(self, req)
     }
 
-    fn flush(&mut self) -> io::Result<Option<()>> {
-        ::Transport::flush(self)
+    fn flush(&mut self) -> Poll<(), io::Error> {
+        FramedIo::flush(self)
     }
 }
 
