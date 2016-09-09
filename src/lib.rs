@@ -20,8 +20,6 @@ pub mod server;
 
 mod framing;
 mod io;
-mod service;
 
 pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};
-pub use service::{NewService};
