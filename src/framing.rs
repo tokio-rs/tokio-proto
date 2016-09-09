@@ -104,7 +104,7 @@ impl<T, P, S> FramedIo for Framed<T, P, S>
 
             // Otherwise, try to read more data and try again
             match try!(self.upstream.try_read_buf(&mut self.rd)) {
-                Some(0) => {
+                Async::Ready(0) => {
                     trace!("read 0 bytes");
 
                     if let Some(v) = self.parse.done(&mut self.rd) {
@@ -113,8 +113,8 @@ impl<T, P, S> FramedIo for Framed<T, P, S>
 
                     return Ok(Async::NotReady);
                 }
-                Some(_) => {}
-                None => {
+                Async::Ready(_) => {}
+                Async::NotReady => {
                     trace!("upstream Transport::read returned would-block");
                     return Ok(Async::NotReady);
                 }
@@ -161,8 +161,8 @@ impl<T, P, S> FramedIo for Framed<T, P, S>
             trace!("writing; remaining={:?}", self.wr.len());
 
             match self.upstream.try_write_buf(&mut self.wr.buf()) {
-                Ok(Some(n)) => self.wr.drop(n),
-                Ok(None) => return Ok(Async::NotReady),
+                Ok(Async::Ready(n)) => self.wr.drop(n),
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Err(e) => {
                     trace!("framed transport flush error; err={:?}", e);
                     return Err(e);
