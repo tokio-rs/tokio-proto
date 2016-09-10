@@ -30,7 +30,7 @@ smallvec = "0.2.0"
 
 bytes = { git = "https://github.com/carllerche/bytes" }
 futures = "0.1"
-tokio-core = { git = "https://github.com/tokio-rs/tokio-core" }
+tokio-core = "0.1"
 tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
 
 [dev-dependencies]
