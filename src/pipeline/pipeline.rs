@@ -147,7 +147,7 @@ impl<S, T, E> Pipeline<S, T>
                 self.out_body = Some(BodySender::Ready(body_sender));
 
                 if let Err(_) = self.dispatch.dispatch(out_message) {
-                    // TODO: Should dispatch be infalliable
+                    // TODO: Should dispatch be infallible
                     unimplemented!();
                 }
             }
@@ -240,7 +240,7 @@ impl<S, T, E> Pipeline<S, T>
         trace!("write_in_message");
         match message {
             Ok(Message::WithoutBody(val)) => {
-                trace!("got in_flight value with body");
+                trace!("got in_flight value without body");
                 try!(self.transport.write(Frame::Message(val)));
 
                 // TODO: don't panic maybe if this isn't true?
