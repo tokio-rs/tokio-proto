@@ -28,12 +28,12 @@ mod client;
 mod server;
 mod pipeline;
 
-pub use self::client::{connect, Client};
+pub use self::client::{connect, Client, Connecting};
 pub use self::server::Server;
 
 use tokio_core::io::FramedIo;
 use tokio_service::Service;
-use futures::{Async, Future, Poll};
+use futures::{Async, Future, IntoFuture, Poll};
 use futures::stream::{Stream, Sender};
 use take::Take;
 use std::{cmp, fmt, io, ops};
@@ -162,8 +162,11 @@ pub trait NewTransport {
                     BodyOut = Self::BodyOut,
                       Error = Self::Error>;
 
+    /// The Future transport
+    type Future: Future<Item = Self::Item, Error = io::Error>;
+
     /// Create and return a new `Transport`
-    fn new_transport(&self) -> io::Result<Self::Item>;
+    fn new_transport(&self) -> Self::Future;
 }
 
 /*
@@ -364,8 +367,9 @@ impl<T, M1, M2, B1, B2, E> Transport for T
  *
  */
 
-impl<F, T> NewTransport for F
-    where F: Fn() -> io::Result<T>,
+impl<F, R, T> NewTransport for F
+    where F: Fn() -> R,
+          R: IntoFuture<Item = T, Error = io::Error>,
           T: Transport,
 {
     type In = T::In;
@@ -374,14 +378,16 @@ impl<F, T> NewTransport for F
     type BodyOut = T::BodyOut;
     type Error = T::Error;
     type Item = T;
+    type Future = R::Future;
 
-    fn new_transport(&self) -> io::Result<T> {
-        self()
+    fn new_transport(&self) -> Self::Future {
+        self().into_future()
     }
 }
 
-impl<F, T> NewTransport for Take<F>
-    where F: FnOnce() -> io::Result<T>,
+impl<F, R, T> NewTransport for Take<F>
+    where F: FnOnce() -> R,
+          R: IntoFuture<Item = T, Error = io::Error>,
           T: Transport,
 {
     type In = T::In;
@@ -390,9 +396,10 @@ impl<F, T> NewTransport for Take<F>
     type BodyOut = T::BodyOut;
     type Error = T::Error;
     type Item = T;
+    type Future = R::Future;
 
-    fn new_transport(&self) -> io::Result<T> {
-        self.take()()
+    fn new_transport(&self) -> Self::Future {
+        self.take()().into_future()
     }
 }
 

@@ -108,14 +108,15 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
     let t = thread::spawn(move || {
         let mut lp = Core::new().unwrap();
         let handle = lp.handle();
-        let (mock, new_transport) = mock::transport(handle.clone());
+        let (mock, new_transport) = mock::transport::<Frame, Frame>(handle.clone());
 
         let transport = new_transport.new_transport().unwrap();
         let transport = RefCell::new(Some(transport));
+        let new_transport = move || Ok(transport.borrow_mut().take().unwrap());
 
-        let service = pipeline::connect(&handle, move || {
-            Ok(transport.borrow_mut().take().unwrap())
-        }).unwrap();
+        let connect = pipeline::connect(new_transport, &handle);
+        let service = connect.wait().unwrap();
+
         tx2.send((mock, service)).unwrap();
         lp.run(rx)
     });

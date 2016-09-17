@@ -3,13 +3,15 @@
 #![deny(warnings, missing_docs)]
 
 extern crate bytes;
-extern crate futures;
 extern crate slab;
 extern crate take;
 extern crate rand;
 extern crate smallvec;
 extern crate tokio_core;
 extern crate tokio_service;
+
+#[macro_use]
+extern crate futures;
 
 #[macro_use]
 extern crate log;

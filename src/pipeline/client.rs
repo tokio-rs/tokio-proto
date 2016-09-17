@@ -1,8 +1,9 @@
 use std::collections::VecDeque;
 use std::io;
+use std::marker::PhantomData;
 
 use futures::stream::Stream;
-use futures::{self, Future, BoxFuture, Complete, Async};
+use futures::{self, Future, BoxFuture, Complete, Async, Poll};
 use tokio_core::reactor::Handle;
 use tokio_core::channel::{channel, Sender, Receiver};
 
@@ -26,34 +27,62 @@ struct Dispatch<T, B, E>
     in_flight: VecDeque<Complete<Result<T::Out, E>>>,
 }
 
+/// Connecting
+pub struct Connecting<T, C> {
+    reactor: Handle,
+    transport: T,
+    client: PhantomData<C>,
+}
+
+impl<F, B, E> Future for Connecting<F, Client<<F::Item as Transport>::In, <F::Item as Transport>::Out, B, E>>
+    where F: Future<Error = io::Error>,
+          F::Item: Transport<Error = E> + Send + 'static,
+          <F::Item as Transport>::In: Send + 'static,
+          <F::Item as Transport>::Out: Send + 'static,
+          B: Stream<Item = <F::Item as Transport>::BodyIn, Error = E> + Send + 'static,
+          E: From<Error<E>> + Send + 'static,
+{
+    type Item = Client<<F::Item as Transport>::In, <F::Item as Transport>::Out, B, E>;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let transport = try_ready!(self.transport.poll());
+
+        // Channel over which the client handle sends requests
+        let (tx, rx) = try!(channel(&self.reactor));
+
+        // Create the client dispatch
+        let dispatch: Dispatch<F::Item, B, E> = Dispatch {
+            requests: rx,
+            in_flight: VecDeque::with_capacity(32),
+        };
+
+        // Create the pipeline with the dispatch and transport
+        let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
+
+        self.reactor.spawn(pipeline.map_err(|e| {
+            // TODO: where to punt this error to?
+            error!("pipeline error: {}", e)
+        }));
+
+        Ok(Async::Ready(Client { tx: tx }))
+    }
+}
+
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
-pub fn connect<T, B, E>(handle: &Handle, new_transport: T)
-                        -> io::Result<Client<T::In, T::Out, B, E>>
-    where T: NewTransport<Error = E> + Send + 'static,
+pub fn connect<T, B, E>(new_transport: T, handle: &Handle) -> Connecting<T::Future, Client<T::In, T::Out, B, E>>
+    where T: NewTransport<Error = E>,
           T::In: Send + 'static,
           T::Out: Send + 'static,
+          T::Item: Send + 'static,
           B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
           E: From<Error<E>> + Send + 'static,
 {
-    let (tx, rx) = try!(channel(handle));
-
-    // Create the transport
-    let transport = try!(new_transport.new_transport());
-
-    // Create the client dispatch
-    let dispatch: Dispatch<T::Item, B, E> = Dispatch {
-        requests: rx,
-        in_flight: VecDeque::with_capacity(32),
-    };
-
-    // Create the pipeline with the dispatch and transport
-    let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
-    handle.spawn(pipeline.map_err(|e| {
-        // TODO: where to punt this error to?
-        error!("pipeline error: {}", e)
-    }));
-
-    Ok(Client { tx: tx })
+    Connecting {
+        reactor: handle.clone(),
+        transport: new_transport.new_transport(),
+        client: PhantomData,
+    }
 }
 
 impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
