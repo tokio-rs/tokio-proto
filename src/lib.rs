@@ -20,8 +20,10 @@ pub mod multiplex;
 pub mod pipeline;
 pub mod server;
 
+mod error;
 mod framing;
 mod io;
 
+pub use error::Error;
 pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};

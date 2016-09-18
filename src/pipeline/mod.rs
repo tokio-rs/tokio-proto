@@ -28,9 +28,9 @@ mod client;
 mod server;
 mod pipeline;
 
-pub use self::client::{connect, Client, Connecting};
 pub use self::server::Server;
 
+pub use self::client::{connect, Client, Connecting};
 use tokio_core::io::FramedIo;
 use tokio_service::Service;
 use futures::{Async, Future, IntoFuture, Poll};
@@ -61,15 +61,6 @@ pub enum Message<T, B> {
     WithoutBody(T),
     /// Has associated streaming body
     WithBody(T, B),
-}
-
-/// Error returned as an Error frame or an `io::Error` that occurerred during
-/// normal processing of the Transport
-pub enum Error<E> {
-    /// Transport frame level error
-    Transport(E),
-    /// I/O level error
-    Io(io::Error),
 }
 
 /// A specialization of `Service` supporting the requirements of server
@@ -400,14 +391,5 @@ impl<F, R, T> NewTransport for Take<F>
 
     fn new_transport(&self) -> Self::Future {
         self.take()().into_future()
-    }
-}
-
-impl From<Error<io::Error>> for io::Error {
-    fn from(err: Error<io::Error>) -> Self {
-        match err {
-            Error::Transport(e) |
-            Error::Io(e) => e,
-        }
     }
 }

@@ -72,15 +72,6 @@ pub enum Message<T, B = Empty<(), ()>> {
     WithBody(T, B),
 }
 
-/// Error returned as an Error frame or an `io::Error` that occurerred during
-/// normal processing of the Transport
-pub enum Error<E> {
-    /// Transport frame level error
-    Transport(E),
-    /// I/O level error
-    Io(io::Error),
-}
-
 /// A specialization of `Service` supporting the requirements of server
 /// pipelined services
 ///
@@ -413,14 +404,5 @@ impl<F, T> NewTransport for Take<F>
 
     fn new_transport(&self) -> io::Result<T> {
         self.take()()
-    }
-}
-
-impl From<Error<io::Error>> for io::Error {
-    fn from(err: Error<io::Error>) -> Self {
-        match err {
-            Error::Transport(e) |
-            Error::Io(e) => e,
-        }
     }
 }

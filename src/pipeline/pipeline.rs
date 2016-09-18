@@ -1,4 +1,5 @@
-use super::{Error, Frame, Message, Transport};
+use {Error};
+use super::{Frame, Message, Transport};
 use futures::stream::{Stream, Sender, FutureSender};
 use futures::{Future, Poll, Async};
 use std::io;
