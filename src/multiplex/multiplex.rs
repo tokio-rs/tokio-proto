@@ -1,5 +1,5 @@
-use {Error};
-use super::{Frame, Message, RequestId, Transport};
+use {Error, Message};
+use super::{Frame, RequestId, Transport};
 use super::frame_buf::{FrameBuf, FrameDeque};
 use futures::{Future, Poll, Async};
 use futures::stream::{Stream};

@@ -23,7 +23,9 @@ pub mod server;
 mod error;
 mod framing;
 mod io;
+mod message;
 
 pub use error::Error;
 pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};
+pub use message::Message;

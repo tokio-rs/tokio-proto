@@ -36,12 +36,13 @@ mod server;
 
 pub use self::server::Server;
 
+use {Message};
 use tokio_core::io::FramedIo;
 use tokio_service::{Service};
 use futures::{Async, Future, Poll};
-use futures::stream::{Stream, Sender, Empty};
+use futures::stream::{Stream, Sender};
 use take::Take;
-use std::{fmt, cmp, io, ops};
+use std::{fmt, io};
 
 /// Identifies a request / response thread
 pub type RequestId = u64;
@@ -62,14 +63,6 @@ pub enum Frame<T, B, E> {
     Error(RequestId, E),
     /// Final frame sent in each transport direction
     Done,
-}
-
-/// Message sent and received from a multiplexed service
-pub enum Message<T, B = Empty<(), ()>> {
-    /// Has no associated streaming body
-    WithoutBody(T),
-    /// Has associated streaming body
-    WithBody(T, B),
 }
 
 /// A specialization of `Service` supporting the requirements of server
@@ -238,75 +231,6 @@ impl<T, B, E> fmt::Debug for Frame<T, B, E>
             Frame::Body(ref id, ref v) => write!(fmt, "Frame::Body({:?}, {:?})", id, v),
             Frame::Error(ref id, ref v) => write!(fmt, "Frame::Error({:?}, {:?})", id, v),
             Frame::Done => write!(fmt, "Frame::Done"),
-        }
-    }
-}
-
-/*
- *
- * ===== impl Message =====
- *
- */
-
-impl<T, B> Message<T, B> {
-    /// If the `Message` value has an associated body stream, return it. The
-    /// original `Message` value will then become a `WithoutBody` variant.
-    pub fn take_body(&mut self) -> Option<B> {
-        use std::ptr;
-
-        // unfortunate that this is unsafe, but I think it is preferable to add
-        // a little bit of unsafe code instead of adding a useless variant to
-        // Message.
-        unsafe {
-            match ptr::read(self as *const Message<T, B>) {
-                m @ Message::WithoutBody(..) => {
-                    ptr::write(self as *mut Message<T, B>, m);
-                    None
-                }
-                Message::WithBody(m, b) => {
-                    ptr::write(self as *mut Message<T, B>, Message::WithoutBody(m));
-                    Some(b)
-                }
-            }
-        }
-    }
-}
-
-impl<T, B> cmp::PartialEq<T> for Message<T, B>
-    where T: cmp::PartialEq
-{
-    fn eq(&self, other: &T) -> bool {
-        (**self).eq(other)
-    }
-}
-
-impl<T, B> ops::Deref for Message<T, B> {
-    type Target = T;
-
-    fn deref(&self) -> &T {
-        match *self {
-            Message::WithoutBody(ref v) => v,
-            Message::WithBody(ref v, _) => v,
-        }
-    }
-}
-
-impl<T, B> ops::DerefMut for Message<T, B> {
-    fn deref_mut(&mut self) -> &mut T {
-        match *self {
-            Message::WithoutBody(ref mut v) => v,
-            Message::WithBody(ref mut v, _) => v,
-        }
-    }
-}
-
-impl<T, B> fmt::Debug for Message<T, B>
-    where T: fmt::Debug
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Message::WithoutBody(ref v) => write!(fmt, "Message::WithoutBody({:?})", v),
-            Message::WithBody(ref v, _) => write!(fmt, "Message::WithBody({:?}, ...)", v),
         }
     }
 }

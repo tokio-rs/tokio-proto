@@ -13,7 +13,8 @@ mod support;
 use futures::stream::{self, Stream, Receiver};
 use futures::{Future, failed, finished, oneshot};
 use support::mock;
-use tokio_proto::pipeline::{self, Frame, Message};
+use tokio_proto::Message;
+use tokio_proto::pipeline::{self, Frame};
 use tokio_core::reactor::Core;
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
@@ -27,7 +28,7 @@ type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<pipeline::Message<Msg, Body>, u32, io::Error>;
+type OutFrame = Frame<Message<Msg, Body>, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
@@ -433,7 +434,7 @@ fn msg_with_body(msg: Msg) -> OutFrame {
 /// Setup a reactor running a pipeline::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: pipeline::ServerService<Request = pipeline::Message<Msg, Body>,
+    where S: pipeline::ServerService<Request = Message<Msg, Body>,
                                     Response = Msg,
                                         Body = u32,
                                   BodyStream = Body,

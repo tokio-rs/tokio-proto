@@ -1,5 +1,5 @@
-use {Error};
-use super::{pipeline, Message, ServerService, Transport};
+use {Error, Message};
+use super::{pipeline, ServerService, Transport};
 use std::collections::VecDeque;
 use std::io;
 use futures::{Future, Poll, Async};

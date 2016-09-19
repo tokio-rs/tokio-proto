@@ -14,7 +14,7 @@ use futures::stream::{self, Receiver};
 use futures::{Future, oneshot};
 use support::mock;
 use tokio_service::Service;
-use tokio_proto::pipeline;
+use tokio_proto::{pipeline, Message};
 use tokio_core::reactor::Core;
 use std::io;
 use std::thread;
@@ -38,7 +38,7 @@ fn test_ping_pong_close() {
     run(|mock, service| {
         mock.allow_write();
 
-        let pong = service.call(pipeline::Message::WithoutBody("ping"));
+        let pong = service.call(Message::WithoutBody("ping"));
         assert_eq!("ping", mock.next_write().unwrap_msg());
 
         mock.send(pipeline::Frame::Message("pong"));
@@ -57,7 +57,7 @@ fn test_response_ready_before_request_sent() {
 
         support::sleep_ms(20);
 
-        let pong = service.call(pipeline::Message::WithoutBody("ping"));
+        let pong = service.call(Message::WithoutBody("ping"));
 
         assert_eq!("pong", pong.wait().unwrap());
     });
@@ -69,7 +69,7 @@ fn test_streaming_request_body() {
         let (mut tx, rx) = stream::channel();
 
         mock.allow_write();
-        let pong = service.call(pipeline::Message::WithBody("ping", rx));
+        let pong = service.call(Message::WithBody("ping", rx));
 
         assert_eq!("ping", mock.next_write().unwrap_msg());
 

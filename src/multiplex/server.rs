@@ -1,5 +1,5 @@
-use {Error};
-use super::{multiplex, RequestId, Message, ServerService, Transport};
+use {Error, Message};
+use super::{multiplex, RequestId, ServerService, Transport};
 use futures::{Future, Poll, Async};
 use std::io;
 

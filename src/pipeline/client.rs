@@ -8,8 +8,8 @@ use tokio_core::reactor::Handle;
 use tokio_core::channel::{channel, Sender, Receiver};
 
 use tokio_service::Service;
-use {Error};
-use super::{pipeline, Message, Transport, NewTransport};
+use {Error, Message};
+use super::{pipeline, Transport, NewTransport};
 
 /// Client `Service` for the pipeline protocol.
 pub struct Client<Req, Resp, ReqBody, E>

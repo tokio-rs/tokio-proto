@@ -13,7 +13,8 @@ mod support;
 use futures::stream::{Receiver};
 use futures::{Future, finished, oneshot};
 use support::mock;
-use tokio_proto::multiplex::{self, RequestId, Frame, Message};
+use tokio_proto::Message;
+use tokio_proto::multiplex::{self, RequestId, Frame};
 use tokio_core::reactor::Core;
 use rand::Rng;
 use std::io;
@@ -29,7 +30,7 @@ type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<multiplex::Message<Msg, Body>, u32, io::Error>;
+type OutFrame = Frame<Message<Msg, Body>, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
@@ -334,7 +335,7 @@ fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
 /// Setup a reactor running a multiplex::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: multiplex::ServerService<Request = multiplex::Message<Msg, Body>,
+    where S: multiplex::ServerService<Request = Message<Msg, Body>,
                                      Response = Msg,
                                          Body = u32,
                                    BodyStream = Body,
