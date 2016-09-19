@@ -24,6 +24,7 @@ mod error;
 mod framing;
 mod io;
 mod message;
+mod sender;
 
 pub use error::Error;
 pub use framing::{Framed, Parse, Serialize};

@@ -277,6 +277,8 @@ impl<S, T, E> Pipeline<S, T>
                 match body.poll() {
                     Ok(Async::Ready(Some(chunk))) => {
                         let r = try!(self.transport.write(Frame::Body(Some(chunk))));
+
+                        // TODO: This doesn't seem correct anymore
                         if !r.is_ready() {
                             return Ok(false);
                         }

@@ -10,8 +10,8 @@ extern crate env_logger;
 
 mod support;
 
-use futures::stream::{Receiver};
 use futures::{Future, finished, oneshot};
+use futures::stream::{self, Stream, Receiver};
 use support::mock;
 use tokio_proto::Message;
 use tokio_proto::multiplex::{self, RequestId, Frame};
@@ -277,23 +277,16 @@ fn test_reaching_max_in_flight_requests() {
             mock.send(msg(i, "request"));
         }
 
-        println!("assert no writes");
-
         // wait a bit
         mock.assert_no_write(100);
 
-        println!("check cnt");
-
         // Only 32 requests processed
         assert_eq!(32, c1.load(Ordering::Relaxed));
-
-        println!("shuffle");
 
         // Pick a random request to complete
         rand::thread_rng().shuffle(&mut responses);
         let (i, c) = responses.remove(0);
 
-        println!("complete");
         c.complete(Ok(Message::WithoutBody("zomg")));
 
         mock.assert_no_write(50);
@@ -304,18 +297,196 @@ fn test_reaching_max_in_flight_requests() {
         // allow the write
         mock.allow_write();
 
-        println!("get write");
         // Read the response
         let wr = mock.next_write();
         assert_eq!(Some(i), wr.request_id());
         assert_eq!("zomg", wr.unwrap_msg());
 
-        println!("YAAAAH");
         mock.assert_no_write(50);
 
         // Next request is processed
         assert_eq!(33, c1.load(Ordering::Relaxed));
     });
+}
+
+#[test]
+fn test_basic_streaming_response_body() {
+    let (tx, rx) = stream::channel::<u32, io::Error>();
+    let rx = Mutex::new(Some(rx));
+
+    let service = tokio_service::simple_service(move |req| {
+        assert_eq!(req, "want-body");
+
+        let body = rx.lock().unwrap().take().unwrap();
+        finished(Message::WithBody("hi2u", body))
+    });
+
+    run(service, |mock| {
+        mock.allow_write();
+        mock.send(msg(3, "want-body"));
+
+        let wr = mock.next_write();
+        assert_eq!(Some(3), wr.request_id());
+        assert_eq!(wr.unwrap_msg(), "hi2u");
+
+        mock.assert_no_write(20);
+
+        // Allow the write, then send the message
+        mock.allow_write();
+        let tx = tx.send(Ok(1)).wait().ok().unwrap();
+        let wr = mock.next_write();
+        assert_eq!(Some(3), wr.request_id());
+        assert_eq!(Some(1), wr.unwrap_body());
+
+        // Send the message then allow the write
+        let tx = tx.send(Ok(2)).wait().ok().unwrap();
+        mock.assert_no_write(20);
+        mock.allow_write();
+        let wr = mock.next_write();
+        assert_eq!(Some(3), wr.request_id());
+        assert_eq!(Some(2), wr.unwrap_body());
+
+        mock.assert_no_write(20);
+        mock.allow_write();
+        mock.assert_no_write(20);
+        drop(tx);
+
+        let wr = mock.next_write();
+        assert_eq!(Some(3), wr.request_id());
+        assert_eq!(None, wr.unwrap_body());
+
+        // Alright, clean shutdown
+        mock.send(Frame::Done);
+        mock.allow_and_assert_drop();
+    });
+}
+
+#[test]
+fn test_basic_streaming_request_body_read_then_respond() {
+    let (tx, rx) = channel();
+
+    let service = tokio_service::simple_service(move |mut req: Message<Msg, Body>| {
+        assert_eq!(req, "have-body");
+
+        let body = req.take_body().unwrap();
+        let tx = tx.clone();
+
+        body.for_each(move |chunk| {
+            tx.lock().unwrap().send(chunk).unwrap();
+            Ok(())
+        }).and_then(|_| {
+            Ok(Message::WithoutBody("hi2u"))
+        })
+    });
+
+    run(service, |mock| {
+        mock.allow_write();
+        mock.send(msg_with_body(2, "have-body"));
+
+        for i in 0..5 {
+            // No write yet
+            mock.assert_no_write(20);
+
+            // Send a body chunk
+            mock.send(Frame::Body(2, Some(i)));
+
+            // Assert service processed chunk
+            assert_eq!(i, rx.recv().unwrap());
+        }
+
+        // Send end-of-stream notification
+        mock.send(Frame::Body(2, None));
+
+        let wr = mock.next_write();
+        assert_eq!(Some(2), wr.request_id());
+        assert_eq!("hi2u", wr.unwrap_msg());
+
+        // Clean shutdown
+        mock.send(Frame::Done);
+        mock.allow_and_assert_drop();
+    });
+}
+
+#[test]
+fn test_interleaving_request_body_chunks() {
+    let _ = ::env_logger::init();
+
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let cnt = AtomicUsize::new(0);
+
+    let service = tokio_service::simple_service(move |mut req: Message<Msg, Body>| {
+        let body = req.take_body().unwrap();
+        let tx = tx.lock().unwrap().clone();
+        let i = cnt.fetch_add(1, Ordering::Relaxed);
+
+        assert_eq!(req, &format!("have-body-{}", i));
+
+        body.for_each(move |chunk| {
+            tx.send((i, chunk)).unwrap();
+            Ok(())
+        }).and_then(|_| {
+            Ok(Message::WithoutBody("hi2u"))
+        })
+    });
+
+    run(service, |mock| {
+        mock.send(msg_with_body(2, "have-body-0"));
+        mock.send(msg_with_body(4, "have-body-1"));
+
+        // The write must be allowed in order to process the bodies
+        mock.allow_write();
+
+        for i in 0..5 {
+            if i % 2 == 0 {
+                // No write yet
+                mock.assert_no_write(20);
+
+                // Send a body chunk
+                mock.send(Frame::Body(2, Some(i)));
+                assert_eq!((0, i), rx.recv().unwrap());
+
+                mock.send(Frame::Body(4, Some(i)));
+                assert_eq!((1, i), rx.recv().unwrap());
+            } else {
+                // No write yet
+                mock.assert_no_write(20);
+
+                mock.send(Frame::Body(4, Some(i)));
+                assert_eq!((1, i), rx.recv().unwrap());
+
+                // Send a body chunk
+                mock.send(Frame::Body(2, Some(i)));
+                assert_eq!((0, i), rx.recv().unwrap());
+            }
+        }
+
+        // Send end-of-stream notification
+        mock.send(Frame::Body(2, None));
+
+        let wr = mock.next_write();
+        assert_eq!(Some(2), wr.request_id());
+        assert_eq!("hi2u", wr.unwrap_msg());
+
+        mock.allow_write();
+        mock.send(Frame::Body(4, None));
+
+        let wr = mock.next_write();
+        assert_eq!(Some(4), wr.request_id());
+        assert_eq!("hi2u", wr.unwrap_msg());
+
+        // Clean shutdown
+        mock.send(Frame::Done);
+        mock.allow_and_assert_drop();
+    });
+}
+
+#[test]
+fn test_interleaving_response_body_chunks() {
+}
+
+#[test]
+fn test_transport_provides_invalid_request_ids() {
 }
 
 #[test]
@@ -330,6 +501,11 @@ fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
 
 fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
     Frame::Message(request_id, Message::WithoutBody(msg))
+}
+
+fn msg_with_body(request_id: RequestId, msg: Msg) -> OutFrame {
+    let (tx, rx) = stream::channel();
+    Frame::MessageWithBody(request_id, Message::WithBody(msg, rx), tx)
 }
 
 /// Setup a reactor running a multiplex::Server with the given service and a
