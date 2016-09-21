@@ -39,17 +39,17 @@ impl<T, S, E> Server<S, T>
 {
     /// Create a new pipeline `Server` dispatcher with the given service and
     /// transport
-    pub fn new(service: S, transport: T) -> io::Result<Server<S, T>> {
+    pub fn new(service: S, transport: T) -> Server<S, T> {
         let dispatch = Dispatch {
             service: service,
             in_flight: vec![],
         };
 
         // Create the multiplexer
-        let multiplex = try!(multiplex::Multiplex::new(dispatch, transport));
+        let multiplex = multiplex::Multiplex::new(dispatch, transport);
 
         // Return the server task
-        Ok(Server { inner: multiplex })
+        Server { inner: multiplex }
     }
 }
 

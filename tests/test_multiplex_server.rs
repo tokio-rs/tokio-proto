@@ -529,7 +529,7 @@ fn run<S, F>(service: S, f: F)
 
         let transport = new_transport.new_transport().unwrap();
         handle.spawn({
-            let dispatch = multiplex::Server::new(service, transport).unwrap();
+            let dispatch = multiplex::Server::new(service, transport);
             dispatch.map_err(|e| error!("error: {}", e))
         });
         tx2.send(mock).unwrap();

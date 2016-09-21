@@ -97,10 +97,10 @@ impl<S, T, E> Multiplex<S, T>
 {
     /// Create a new pipeline `Multiplex` dispatcher with the given service and
     /// transport
-    pub fn new(dispatch: S, transport: T) -> io::Result<Multiplex<S, T>> {
+    pub fn new(dispatch: S, transport: T) -> Multiplex<S, T> {
         let frame_buf = FrameBuf::with_capacity(MAX_BUFFERED_FRAMES);
 
-        Ok(Multiplex {
+        Multiplex {
             run: true,
             transport: transport,
             out_bodies: HashMap::new(),
@@ -110,7 +110,7 @@ impl<S, T, E> Multiplex<S, T>
             dispatch_deque: frame_buf.deque(),
             frame_buf: frame_buf,
             scratch: vec![],
-        })
+        }
     }
 
     /// Returns true if the multiplexer has nothing left to do
