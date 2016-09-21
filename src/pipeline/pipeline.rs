@@ -66,15 +66,15 @@ impl<S, T, E> Pipeline<S, T>
 {
     /// Create a new pipeline `Pipeline` dispatcher with the given service and
     /// transport
-    pub fn new(dispatch: S, transport: T) -> io::Result<Pipeline<S, T>> {
-        Ok(Pipeline {
+    pub fn new(dispatch: S, transport: T) -> Pipeline<S, T> {
+        Pipeline {
             run: true,
             transport: transport,
             out_body: None,
             in_body: None,
             is_flushed: true,
             dispatch: dispatch,
-        })
+        }
     }
 
     /// Returns true if the pipeline server dispatch has nothing left to do

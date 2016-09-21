@@ -25,7 +25,7 @@ use std::sync::mpsc;
 type TransportHandle = mock::TransportHandle<Frame, Frame>;
 
 // Client handle
-type Client = pipeline::Client<&'static str, &'static str, Body, io::Error>;
+type Client = tokio_proto::Client<&'static str, &'static str, Body, io::Error>;
 
 // In frame
 type Frame = pipeline::Frame<&'static str, u32, io::Error>;
@@ -114,8 +114,7 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
         let transport = RefCell::new(Some(transport));
         let new_transport = move || Ok(transport.borrow_mut().take().unwrap());
 
-        let connect = pipeline::connect(new_transport, &handle);
-        let service = connect.wait().unwrap();
+        let service = pipeline::connect(new_transport, &handle);
 
         tx2.send((mock, service)).unwrap();
         lp.run(rx)

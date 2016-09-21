@@ -29,7 +29,7 @@ mod server;
 mod pipeline;
 
 pub use self::server::Server;
-pub use self::client::{connect, Client, Connecting};
+pub use self::client::connect;
 
 use {Message};
 use tokio_core::io::FramedIo;

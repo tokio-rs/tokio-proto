@@ -21,6 +21,9 @@ impl<T, E> Sender<T, E> {
             Some(State::Ready(sender)) => {
                 let busy = sender.send(t);
                 self.inner = Some(State::Busy(busy));
+
+                // Poll the sender to actually fire the message
+                let _ = self.poll_ready();
             }
             _ => panic!("invalid internal state"),
         }

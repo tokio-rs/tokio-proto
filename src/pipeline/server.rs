@@ -43,7 +43,7 @@ impl<T, S, E> Server<S, T>
         };
 
         // Create the pipeline dispatcher
-        let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
+        let pipeline = pipeline::Pipeline::new(dispatch, transport);
 
         // Return the server task
         Ok(Server { inner: pipeline })

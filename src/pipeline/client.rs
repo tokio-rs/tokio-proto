@@ -1,123 +1,52 @@
+use {Error, Message};
+use super::{Transport, NewTransport};
+use super::pipeline::{self, Pipeline};
+use client::{self, Client, Receiver};
+use futures::stream::Stream;
+use futures::{Future, Complete, Async};
+use tokio_core::reactor::Handle;
 use std::collections::VecDeque;
 use std::io;
-use std::marker::PhantomData;
-
-use futures::stream::Stream;
-use futures::{self, Future, BoxFuture, Complete, Async, Poll};
-use tokio_core::reactor::Handle;
-use tokio_core::channel::{channel, Sender, Receiver};
-
-use tokio_service::Service;
-use {Error, Message};
-use super::{pipeline, Transport, NewTransport};
-
-/// Client `Service` for the pipeline protocol.
-pub struct Client<Req, Resp, ReqBody, E>
-    where ReqBody: Stream<Error = E>,
-          E: From<Error<E>>,
-{
-    tx: Sender<(Message<Req, ReqBody>, Complete<Result<Resp, E>>)>,
-}
 
 struct Dispatch<T, B, E>
     where T: Transport<Error = E>,
           B: Stream<Item = T::BodyIn, Error = E>,
           E: From<Error<E>>,
 {
-    requests: Receiver<(Message<T::In, B>, Complete<Result<T::Out, E>>)>,
+    requests: Receiver<T::In, T::Out, B, E>,
     in_flight: VecDeque<Complete<Result<T::Out, E>>>,
 }
 
-/// Connecting
-pub struct Connecting<T, C> {
-    reactor: Handle,
-    transport: T,
-    client: PhantomData<C>,
-}
-
-impl<F, B, E> Future for Connecting<F, Client<<F::Item as Transport>::In, <F::Item as Transport>::Out, B, E>>
-    where F: Future<Error = io::Error>,
-          F::Item: Transport<Error = E> + Send + 'static,
-          <F::Item as Transport>::In: Send + 'static,
-          <F::Item as Transport>::Out: Send + 'static,
-          B: Stream<Item = <F::Item as Transport>::BodyIn, Error = E> + Send + 'static,
-          E: From<Error<E>> + Send + 'static,
-{
-    type Item = Client<<F::Item as Transport>::In, <F::Item as Transport>::Out, B, E>;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let transport = try_ready!(self.transport.poll());
-
-        // Channel over which the client handle sends requests
-        let (tx, rx) = try!(channel(&self.reactor));
-
-        // Create the client dispatch
-        let dispatch: Dispatch<F::Item, B, E> = Dispatch {
-            requests: rx,
-            in_flight: VecDeque::with_capacity(32),
-        };
-
-        // Create the pipeline with the dispatch and transport
-        let pipeline = try!(pipeline::Pipeline::new(dispatch, transport));
-
-        self.reactor.spawn(pipeline.map_err(|e| {
-            // TODO: where to punt this error to?
-            error!("pipeline error: {}", e)
-        }));
-
-        Ok(Async::Ready(Client { tx: tx }))
-    }
-}
-
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
-pub fn connect<T, B, E>(new_transport: T, handle: &Handle) -> Connecting<T::Future, Client<T::In, T::Out, B, E>>
+pub fn connect<T, B, E>(new_transport: T, handle: &Handle) -> Client<T::In, T::Out, B, E>
     where T: NewTransport<Error = E>,
           T::In: Send + 'static,
           T::Out: Send + 'static,
           T::Item: Send + 'static,
+          T::Future: Send + 'static,
           B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
           E: From<Error<E>> + Send + 'static,
 {
-    Connecting {
-        reactor: handle.clone(),
-        transport: new_transport.new_transport(),
-        client: PhantomData,
-    }
-}
+    let (client, rx) = client::pair();
 
-impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
-    where Req: Send + 'static,
-          Resp: Send + 'static,
-          ReqBody: Stream<Error = E>,
-          E: From<Error<E>> + Send + 'static,
-{
-    type Request = Message<Req, ReqBody>;
-    type Response = Resp;
-    type Error = E;
-    type Future = BoxFuture<Self::Response, E>;
+    // Create the client dispatch
+    let dispatch: Dispatch<T::Item, B, E> = Dispatch {
+        requests: rx,
+        in_flight: VecDeque::with_capacity(32),
+    };
 
-    fn call(&self, request: Self::Request) -> Self::Future {
-        let (tx, rx) = futures::oneshot();
+    let task = new_transport.new_transport()
+        .and_then(|transport| Pipeline::new(dispatch, transport))
+        .map_err(|e| {
+            // TODO: where to punt this error to?
+            error!("pipeline error: {}", e);
+        });
 
-        // TODO: handle error
-        self.tx.send((request, tx)).ok().unwrap();
+    // Spawn the task
+    handle.spawn(task);
 
-        rx.then(|t| t.unwrap()).boxed()
-    }
-
-    fn poll_ready(&self) -> Async<()> {
-        Async::Ready(())
-    }
-}
-
-impl<Req, Resp, ReqBody, E> Clone for Client<Req, Resp, ReqBody, E>
-    where ReqBody: Stream<Error = E>,
-          E: From<Error<E>>,
-{
-    fn clone(&self) -> Client<Req, Resp, ReqBody, E> {
-        Client { tx: self.tx.clone() }
-    }
+    // Return the client
+    client
 }
 
 impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
@@ -142,10 +71,11 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
     }
 
     fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>> {
+        trace!("Dispatch::poll");
         // Try to get a new request frame
         match self.requests.poll() {
             Ok(Async::Ready(Some((request, complete)))) => {
-                trace!("received request");
+                trace!("   --> received request");
 
                 // Track complete handle
                 self.in_flight.push_back(complete);
@@ -153,14 +83,21 @@ impl<T, B, E> pipeline::Dispatch for Dispatch<T, B, E>
                 Some(Ok(request))
 
             }
-            Ok(Async::Ready(None)) => None,
+            Ok(Async::Ready(None)) => {
+                trace!("   --> client dropped");
+                None
+            }
             Err(e) => {
+                trace!("   --> error");
                 // An error on receive can only happen when the other half
                 // disconnected. In this case, the client needs to be
                 // shutdown
                 panic!("unimplemented error handling: {:?}", e);
             }
-            Ok(Async::NotReady) => None,
+            Ok(Async::NotReady) => {
+                trace!("   --> not ready");
+                None
+            }
         }
     }
 
