@@ -1,9 +1,8 @@
-#![allow(warnings)]
-
 use futures::{Async, Poll};
 use tokio_core::io::{Io, FramedIo};
 use io::{TryRead, TryWrite};
-use bytes::{alloc, MutBuf, BlockBuf, Source};
+use bytes::{MutBuf};
+use bytes::buf::{BlockBuf};
 use std::io;
 
 /// FramedIo handling frame encoding and decoding.
@@ -29,7 +28,7 @@ pub trait Parse {
     fn parse(&mut self, buf: &mut BlockBuf) -> Option<Self::Out>;
 
     /// Called when there are no more inbound bytes
-    fn done(&mut self, buf: &mut BlockBuf) -> Option<Self::Out> {
+    fn done(&mut self, _buf: &mut BlockBuf) -> Option<Self::Out> {
         None
     }
 }

@@ -1,4 +1,5 @@
-use bytes::{Buf, MutBuf, ReadExt, WriteExt};
+use bytes::{Buf, MutBuf};
+use bytes::buf::{ReadExt, WriteExt};
 use futures::{Poll, Async};
 use std::io;
 
