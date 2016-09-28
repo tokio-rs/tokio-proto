@@ -21,6 +21,8 @@ use std::collections::HashMap;
 /// See module docs for more detail
 const MAX_BUFFERED_FRAMES: usize = 128;
 
+/// Task that drives multiplexed protocols
+///
 /// Provides protocol multiplexing functionality in a generic way over clients
 /// and servers. Used internally by `multiplex::Client` and
 /// `multiplex::Server`.
@@ -59,8 +61,10 @@ pub trait Dispatch {
     /// Body stream written to transport
     type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error>;
 
+    /// Message read from the transprort
     type OutMsg;
 
+    /// Error
     type Error;
 
     /// Process an out message

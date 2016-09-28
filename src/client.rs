@@ -1,3 +1,12 @@
+//! Utilities for building protocol clients
+//!
+//! Provides a channel that handles details of providing a `Service` client.
+//! Usually, this module does not have to be used directly. Instead it is used
+//! by `pipeline` and `multiplex` in the `connect` fns.
+//!
+//! However, some protocols require implementing the dispatch layer directly,
+//! in which case using client channel is helpful.
+
 use {Error, Message};
 use sender::Sender;
 use tokio_service::Service;
@@ -16,13 +25,14 @@ pub struct Client<Req, Resp, ReqBody, E>
 
 /// Message used to dispatch requests to the task managing the client
 /// connection.
-pub type Envelope<Req, Resp, ReqBody, E> =
+type Envelope<Req, Resp, ReqBody, E> =
     (Message<Req, ReqBody>, Complete<Result<Resp, E>>);
 
 /// A client / receiver pair
-pub type Pair<Req, Resp, ReqBody, E> =
+type Pair<Req, Resp, ReqBody, E> =
     (Client<Req, Resp, ReqBody, E>, Receiver<Req, Resp, ReqBody, E>);
 
+/// Receive requests submitted to the client
 pub type Receiver<Req, Resp, ReqBody, E> =
     stream::Receiver<Envelope<Req, Resp, ReqBody, E>, io::Error>;
 

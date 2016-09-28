@@ -23,8 +23,8 @@ pub fn connect<T, B, E>(new_transport: T, handle: &Handle) -> Client<T::In, T::O
     where T: NewTransport<Error = E>,
           T::In: Send + 'static,
           T::Out: Send + 'static,
-          T::Item: Send + 'static,
-          T::Future: Send + 'static,
+          T::Item: 'static,
+          T::Future: 'static,
           B: Stream<Item = T::BodyIn, Error = E> + Send + 'static,
           E: From<Error<E>> + Send + 'static,
 {

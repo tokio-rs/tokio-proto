@@ -35,6 +35,7 @@ mod client;
 mod multiplex;
 mod server;
 
+pub use self::multiplex::{Multiplex, Dispatch};
 pub use self::client::connect;
 pub use self::server::Server;
 

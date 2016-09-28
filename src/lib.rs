@@ -16,11 +16,11 @@ extern crate futures;
 #[macro_use]
 extern crate log;
 
+pub mod client;
 pub mod multiplex;
 pub mod pipeline;
 pub mod server;
 
-mod client;
 mod error;
 mod framing;
 mod io;
