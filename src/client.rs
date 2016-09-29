@@ -7,6 +7,10 @@
 //! However, some protocols require implementing the dispatch layer directly,
 //! in which case using client channel is helpful.
 
+// Allow warnings in order to prevent the compiler from outputting an error
+// that seems to be fixed on nightly.
+#![allow(warnings)]
+
 use {Error, Message};
 use sender::Sender;
 use tokio_service::Service;
@@ -29,7 +33,7 @@ type Envelope<Req, Resp, ReqBody, E> =
     (Message<Req, ReqBody>, Complete<Result<Resp, E>>);
 
 /// A client / receiver pair
-type Pair<Req, Resp, ReqBody, E> =
+pub type Pair<Req, Resp, ReqBody, E> =
     (Client<Req, Resp, ReqBody, E>, Receiver<Req, Resp, ReqBody, E>);
 
 /// Receive requests submitted to the client
