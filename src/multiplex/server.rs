@@ -62,9 +62,14 @@ impl<S> multiplex::Dispatch for Dispatch<S>
     type OutMsg = S::Request;
     type Error = S::Error;
 
-    fn dispatch(&mut self, request_id: RequestId, request: Self::OutMsg) -> io::Result<()> {
-        let response = self.service.call(request);
-        self.in_flight.push((request_id, InFlight::Active(response)));
+    fn dispatch(&mut self, request_id: RequestId, request: Result<Self::OutMsg, S::Error>) -> io::Result<()> {
+        if let Ok(request) = request {
+            let response = self.service.call(request);
+            self.in_flight.push((request_id, InFlight::Active(response)));
+        }
+
+        // TODO: Should the error be handled differently?
+
         Ok(())
     }
 

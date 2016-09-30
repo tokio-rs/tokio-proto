@@ -51,6 +51,25 @@ fn test_ping_pong_close() {
     });
 }
 
+#[test]
+fn test_error_on_response() {
+    run(|mock, service| {
+        mock.allow_write();
+
+        let pong = service.call(Message::WithoutBody("ping"));
+
+        let wr = mock.next_write();
+        assert_eq!(Some(0), wr.request_id());
+        assert_eq!("ping", wr.unwrap_msg());
+
+        mock.send(multiplex::Frame::Error(0, io::Error::new(io::ErrorKind::Other, "nope")));
+        assert_eq!(io::ErrorKind::Other, pong.wait().unwrap_err().kind());
+
+        mock.send(multiplex::Frame::Done);
+        mock.allow_and_assert_drop();
+    });
+}
+
 /// Setup a reactor running a multiplex::Client and a mock transport. Yields the
 /// mock transport handle to the function.
 fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {

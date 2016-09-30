@@ -409,8 +409,6 @@ fn test_basic_streaming_request_body_read_then_respond() {
 
 #[test]
 fn test_interleaving_request_body_chunks() {
-    let _ = ::env_logger::init();
-
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
     let cnt = AtomicUsize::new(0);
@@ -491,6 +489,30 @@ fn test_transport_provides_invalid_request_ids() {
 
 #[test]
 fn test_reaching_max_buffered_frames() {
+}
+
+#[test]
+fn test_read_error_as_first_frame() {
+    let service = tokio_service::simple_service(|_| {
+        // Makes the compiler happy
+        if true {
+            panic!("should not be called");
+        }
+
+        finished(Message::WithoutBody("nope"))
+    });
+
+    run(service, |mock| {
+        mock.allow_write();
+        mock.send(Frame::Error(1, io::Error::new(io::ErrorKind::Other, "boom")));
+
+        mock.send(Frame::Done);
+        mock.allow_and_assert_drop();
+    });
+}
+
+#[test]
+fn test_read_error_during_stream() {
 }
 
 fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {

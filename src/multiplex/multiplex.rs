@@ -68,7 +68,7 @@ pub trait Dispatch {
     type Error;
 
     /// Process an out message
-    fn dispatch(&mut self, request_id: RequestId, message: Self::OutMsg) -> io::Result<()>;
+    fn dispatch(&mut self, request_id: RequestId, message: Result<Self::OutMsg, Self::Error>) -> io::Result<()>;
 
     /// Poll the next completed message
     fn poll(&mut self) -> Option<(RequestId, Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>)>;
@@ -142,11 +142,12 @@ impl<S, T, E> Multiplex<S, T>
         while self.dispatch.is_ready() {
             match self.dispatch_deque.pop() {
                 Some(Frame::Message(request_id, msg)) => {
-                    if let Err(_) = self.dispatch.dispatch(request_id, msg) {
-                        unimplemented!();
-                    }
+                    try!(self.dispatch.dispatch(request_id, Ok(msg)));
                 }
-                Some(_) => unimplemented!(),
+                Some(Frame::Error(request_id, err)) => {
+                    try!(self.dispatch.dispatch(request_id, Err(err)));
+                }
+                Some(_) => panic!("unexpected dispatch frame"),
                 None => return Ok(()),
             }
         }
@@ -181,6 +182,11 @@ impl<S, T, E> Multiplex<S, T>
                                 // Done sending the body chunks, drop the sender
                                 self.scratch.push(*id);
                                 break;
+                            }
+                            Some(Frame::Error(_, err)) => {
+                                trace!("   --> sending error");
+                                // Send the error
+                                body_sender.sender.send(Err(err));
                             }
                             Some(_) => unreachable!(),
                             None => {
@@ -223,7 +229,7 @@ impl<S, T, E> Multiplex<S, T>
         match frame {
             Frame::Message(id, out_message) => {
                 trace!("   --> read out message; id={:?}", id);
-                try!(self.process_out_msg(id, out_message));
+                try!(self.process_out_msg(id, Ok(out_message)));
             }
             Frame::MessageWithBody(id, out_message, body_sender) => {
                 trace!("   --> read out message; id={:?}", id);
@@ -238,11 +244,11 @@ impl<S, T, E> Multiplex<S, T>
                 self.out_bodies.insert(id, body_sender);
 
                 // Process the actual message
-                try!(self.process_out_msg(id, out_message));
+                try!(self.process_out_msg(id, Ok(out_message)));
             }
             Frame::Body(id, chunk) => {
                 trace!("   --> read out body chunk");
-                self.process_out_body_chunk(id, chunk);
+                self.process_out_body_chunk(id, Ok(chunk));
             }
             Frame::Done => {
                 trace!("read Frame::Done");
@@ -251,15 +257,27 @@ impl<S, T, E> Multiplex<S, T>
                 // through the read-cycle again.
                 self.run = false;
             }
-            Frame::Error(_, _) => {
-                unimplemented!();
+            Frame::Error(id, err) => {
+                try!(self.process_out_err(id, err));
             }
         }
 
         Ok(())
     }
 
-    fn process_out_msg(&mut self, id: RequestId, msg: T::Out) -> io::Result<()> {
+    fn process_out_err(&mut self, id: RequestId, err: T::Error) -> io::Result<()> {
+        trace!("   --> process error frame");
+        if self.out_bodies.contains_key(&id) {
+            trace!("   --> send error to body stream");
+            self.process_out_body_chunk(id, Err(err));
+            Ok(())
+        } else {
+            trace!("   --> send error to dispatcher");
+            self.process_out_msg(id, Err(err))
+        }
+    }
+
+    fn process_out_msg(&mut self, id: RequestId, msg: Result<T::Out, T::Error>) -> io::Result<()> {
         if self.dispatch.is_ready() {
             trace!("   --> dispatch ready -- dispatching");
 
@@ -272,14 +290,20 @@ impl<S, T, E> Multiplex<S, T>
             }
         } else {
             trace!("   --> dispatch not ready");
+
             // Queue the dispatch buffer
-            self.dispatch_deque.push(Frame::Message(id, msg));
+            let frame = match msg {
+                Ok(msg) => Frame::Message(id, msg),
+                Err(e) => Frame::Error(id, e),
+            };
+
+            self.dispatch_deque.push(frame);
         }
 
         Ok(())
     }
 
-    fn process_out_body_chunk(&mut self, id: RequestId, chunk: Option<T::BodyOut>) {
+    fn process_out_body_chunk(&mut self, id: RequestId, chunk: Result<Option<T::BodyOut>, T::Error>) {
         trace!("process out body chunk; id={:?}", id);
 
         match self.out_bodies.get_mut(&id) {
@@ -287,11 +311,18 @@ impl<S, T, E> Multiplex<S, T>
                 if body_sender.is_ready {
                     trace!("   --> sender is ready");
 
+                    // Reverse Result & Option
+                    let chunk = match chunk {
+                        Ok(Some(v)) => Some(Ok(v)),
+                        Ok(None) => None,
+                        Err(e) => Some(Err(e)),
+                    };
+
                     if let Some(chunk) = chunk {
                         trace!("   --> send chunk");
 
                         // Send the chunk
-                        body_sender.sender.send(Ok(chunk));
+                        body_sender.sender.send(chunk);
 
                         // See if the sender is ready
                         match body_sender.sender.poll_ready() {
@@ -319,7 +350,13 @@ impl<S, T, E> Multiplex<S, T>
                     // and remove the body sender handle.
                 } else {
                     trace!("   --> queueing chunk");
-                    body_sender.deque.push(Frame::Body(id, chunk));
+
+                    let frame = match chunk {
+                        Ok(chunk) => Frame::Body(id, chunk),
+                        Err(e) => Frame::Error(id, e),
+                    };
+
+                    body_sender.deque.push(frame);
                     return;
                 }
             }
@@ -450,7 +487,7 @@ impl<S, T, E> Future for Multiplex<S, T>
 
     // Tick the pipeline state machine
     fn poll(&mut self) -> Poll<(), io::Error> {
-        trace!("Multiplex::tick");
+        trace!("Multiplex::tick ~~~~~~~~~~~~~~~~~~~~~~~~~~~");
 
         // Always flush the transport first
         try!(self.flush());
@@ -485,8 +522,11 @@ impl<S, T, E> Future for Multiplex<S, T>
         // case where the client shuts down half the socket.
         //
         if self.is_done() {
+            trace!("multiplex done; terminating");
             return Ok(Async::Ready(()));
         }
+
+        trace!("tick done; waiting for wake-up");
 
         // Tick again later
         Ok(Async::NotReady)

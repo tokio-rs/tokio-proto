@@ -62,9 +62,9 @@ impl<T, B, E> multiplex::Dispatch for Dispatch<T, B, E>
     type OutMsg = T::Out;
     type Error = E;
 
-    fn dispatch(&mut self, request_id: RequestId, response: Self::OutMsg) -> io::Result<()> {
+    fn dispatch(&mut self, request_id: RequestId, response: Result<Self::OutMsg, E>) -> io::Result<()> {
         if let Some(complete) = self.in_flight.remove(&request_id) {
-            complete.complete(Ok(response));
+            complete.complete(response);
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "request / response mismatch"));
         }
