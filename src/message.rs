@@ -9,6 +9,30 @@ pub enum Message<T, B> {
 }
 
 impl<T, B> Message<T, B> {
+    /// Returns a reference to the inner value
+    pub fn get_ref(&self) -> &T {
+        match *self {
+            Message::WithoutBody(ref v) => v,
+            Message::WithBody(ref v, _) => v,
+        }
+    }
+
+    /// Returns a mutable reference to the inner value
+    pub fn get_mut(&mut self) -> &mut T {
+        match *self {
+            Message::WithoutBody(ref mut v) => v,
+            Message::WithBody(ref mut v, _) => v,
+        }
+    }
+
+    /// Consumes the value and returns the inner value
+    pub fn into_inner(self) -> T {
+        match self {
+            Message::WithoutBody(v) => v,
+            Message::WithBody(v, _) => v,
+        }
+    }
+
     /// If the `Message` value has an associated body stream, return it. The
     /// original `Message` value will then become a `WithoutBody` variant.
     pub fn take_body(&mut self) -> Option<B> {
