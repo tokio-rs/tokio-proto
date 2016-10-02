@@ -15,6 +15,7 @@ use futures::stream::{self, Stream, Receiver};
 use support::mock;
 use tokio_proto::Message;
 use tokio_proto::multiplex::{self, RequestId, Frame};
+use tokio_service::Service;
 use tokio_core::reactor::Core;
 use rand::Rng;
 use std::io;
@@ -533,13 +534,28 @@ fn msg_with_body(request_id: RequestId, msg: Msg) -> OutFrame {
 /// Setup a reactor running a multiplex::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: multiplex::ServerService<Request = Message<Msg, Body>,
-                                     Response = Msg,
-                                         Body = u32,
-                                   BodyStream = Body,
-                                        Error = io::Error> + Send + 'static,
+    where S: Service<Request = Message<Msg, Body>,
+                    Response = Message<Msg, Body>,
+                       Error = io::Error> + Sync + Send + 'static,
           S::Future: Send + 'static,
-          F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),
+          F: FnOnce(mock::TransportHandle<InFrame, OutFrame>)
+{
+    use tokio_service::simple_service;
+
+    let service = simple_service(move |request| {
+        Box::new(service.call(request)) as Box<Future<Item = Message<Msg, Body>, Error = io::Error> + Send + 'static>
+    });
+
+    _run(Box::new(service), f);
+}
+
+type ServerService = Box<Service<Request = Message<Msg, Body>,
+                                Response = Message<Msg, Body>,
+                                   Error = io::Error,
+                                  Future = Box<Future<Item = Message<Msg, Body>, Error = io::Error> + Send + 'static>> + Send + 'static>;
+
+fn _run<F>(service: ServerService, f: F)
+    where F: FnOnce(mock::TransportHandle<InFrame, OutFrame>)
 {
     drop(::env_logger::init());
     let (tx, rx) = oneshot();
