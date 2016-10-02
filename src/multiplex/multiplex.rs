@@ -119,7 +119,7 @@ impl<S, T, E> Multiplex<S, T>
 
     /// Returns true if the multiplexer has nothing left to do
     fn is_done(&self) -> bool {
-        !self.run && self.is_flushed && !self.dispatch.has_in_flight()
+        !self.run && self.is_flushed && !self.dispatch.has_in_flight() && self.out_bodies.len() == 0
     }
 
     fn read_out_frames(&mut self) -> io::Result<()> {
@@ -252,9 +252,7 @@ impl<S, T, E> Multiplex<S, T>
             }
             Frame::Done => {
                 trace!("read Frame::Done");
-                // At this point, we just return. This works
-                // because tick() will be called again and go
-                // through the read-cycle again.
+                assert!(self.in_bodies.len() == 0, "there are still in-bodies to process");
                 self.run = false;
             }
             Frame::Error(id, err) => {
