@@ -1,15 +1,22 @@
-use {Error, Message};
+use {Message, Body, Error};
 use super::{Frame, RequestId, Transport};
 use super::frame_buf::{FrameBuf, FrameDeque};
 use sender::Sender;
 use futures::{Future, Poll, Async};
-use futures::stream::Stream;
+use futures::stream::{self, Stream};
 use std::io;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::collections::hash_map::Entry;
 
 /*
  * TODO:
  *
+ * - Handle errors correctly
+ *    * When the FramedIo returns an error, how is it handled?
+ *    * Is it sent to the dispatch?
+ *    * Is it sent to the body?
+ *    * What happens if there are in-flight *in* bodies
+ *    * What happens if the out message is buffered?
  * - [BUG] Can only poll from body sender FutureSender in `flush`
  * - Move constants to configuration settings
  *
@@ -26,66 +33,114 @@ const MAX_BUFFERED_FRAMES: usize = 128;
 /// Provides protocol multiplexing functionality in a generic way over clients
 /// and servers. Used internally by `multiplex::Client` and
 /// `multiplex::Server`.
-pub struct Multiplex<S, T>
-    where T: Transport,
-          S: Dispatch,
-{
+pub struct Multiplex<T> where T: Dispatch {
     // True as long as the connection has more request frames to read.
     run: bool,
-    // The transport wrapping the connection.
-    transport: T,
-    // The `Sender` for the in-flight request body streams
-    out_bodies: HashMap<RequestId, BodySender<T::Out, T::BodyOut, S::Error>>,
-    // The in-flight response body streams
-    in_bodies: HashMap<RequestId, S::InBodyStream>,
+
+    // Glues the service with the pipeline task
+    dispatch: T,
+
+    // Tracks in-progress exchanges
+    exchanges: HashMap<RequestId, Exchange<T>>,
+
     // True when the transport is fully flushed
     is_flushed: bool,
-    // Glues the service with the pipeline task
-    dispatch: S,
-    // Buffer of pending messages for the dispatch
-    dispatch_deque: FrameDeque<Frame<T::Out, T::BodyOut, S::Error>>,
+
+    // RequestIds of exchanges that have not yet been dispatched
+    dispatch_deque: VecDeque<RequestId>,
+
     // Storage for buffered frames
-    frame_buf: FrameBuf<Frame<T::Out, T::BodyOut, S::Error>>,
+    frame_buf: FrameBuf<Option<Result<T::BodyOut, T::Error>>>,
+
     // Temporary storage for RequestIds...
     scratch: Vec<RequestId>,
 }
 
-/// Dispatch messages from the transport to the service
-pub trait Dispatch {
-    /// Message written to transport
-    type InMsg;
+/// Manages the state of a single in / out exchange
+struct Exchange<T: Dispatch> {
+    // Tracks the direction of the request as well as potentially buffers the
+    // request message.
+    //
+    // The request message is only buffered when the dispatch is at capacity.
+    // This case *shouldn't* happen and if it does it indicates a poorly
+    // configured multiplex protocol or something a bit weird is happening.
+    //
+    // However, the world is full of multiplex protocols that don't have proper
+    // flow control, so the case needs to be handled.
+    request: Request<T>,
 
-    /// Body written to transport
-    type InBody;
+    // True indicates that the response has been handled
+    responded: bool,
 
-    /// Body stream written to transport
-    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error>;
+    // The outbound body stream sender
+    out_body: Option<Sender<T::BodyOut, T::Error>>,
 
-    /// Message read from the transprort
-    type OutMsg;
+    // Buffers outbound body chunks until the sender is ready
+    out_deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>,
 
-    /// Error
-    type Error;
-
-    /// Process an out message
-    fn dispatch(&mut self, request_id: RequestId, message: Result<Self::OutMsg, Self::Error>) -> io::Result<()>;
-
-    /// Poll the next completed message
-    fn poll(&mut self) -> Option<(RequestId, Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>)>;
-
-    /// The `Dispatch` is ready to accept another message
-    fn is_ready(&self) -> bool;
-
-    /// RPC currently in flight
-    fn has_in_flight(&self) -> bool;
-}
-
-struct BodySender<T, B, E> {
-    deque: FrameDeque<Frame<T, B, E>>,
-    sender: Sender<B, E>,
     // Tracks if the sender is ready. This value is computed on each tick when
     // the senders are flushed and before new frames are read.
-    is_ready: bool,
+    //
+    // The reason readiness is tracked here is because if readiness changes
+    // during the progress of the multiplex tick, an outbound body chunk can't
+    // simply be dispatched. Order must be maintained, so any buffered outbound
+    // chunks must be dispatched first.
+    out_is_ready: bool,
+
+    // The inbound body stream receiver
+    in_body: Option<T::Stream>,
+}
+
+enum Request<T: Dispatch> {
+    In, // TODO: Handle inbound message buffering?
+    Out(Option<Message<T::Out, Body<T::BodyOut, T::Error>>>),
+}
+
+/// Message used to communicate through the multiplex dispatch
+pub type MultiplexMessage<T, B, E> = (RequestId, Result<Message<T, B>, E>);
+
+/// Dispatch messages from the transport to the service
+pub trait Dispatch: 'static {
+
+    /// Messages written to the transport
+    type In: 'static;
+
+    /// Inbound body frame
+    type BodyIn: 'static;
+
+    /// Messages read from the transport
+    type Out: 'static;
+
+    /// Outbound body frame
+    type BodyOut: 'static;
+
+    /// Transport error
+    type Error: From<Error<Self::Error>> + 'static;
+
+    /// Inbound body stream type
+    type Stream: Stream<Item = Self::BodyIn, Error = Self::Error> + 'static;
+
+    /// Transport type
+    type Transport: Transport<In = Self::In,
+                          BodyIn = Self::BodyIn,
+                             Out = Self::Out,
+                         BodyOut = Self::BodyOut,
+                           Error = Self::Error>;
+
+    /// Mutable reference to the transport
+    fn transport(&mut self) -> &mut Self::Transport;
+
+    /// Poll the next available message
+    fn poll(&mut self) -> Poll<Option<MultiplexMessage<Self::In, Self::Stream, Self::Error>>, io::Error>;
+
+    /// The `Dispatch` is ready to accept another message
+    fn poll_ready(&self) -> Async<()>;
+
+    /// Process an out message
+    fn dispatch(&mut self, message: MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()>;
+
+    /// Cancel interest in the exchange identified by RequestId
+    fn cancel(&mut self, request_id: RequestId) -> io::Result<()>;
 }
 
 /*
@@ -94,24 +149,18 @@ struct BodySender<T, B, E> {
  *
  */
 
-impl<S, T, E> Multiplex<S, T>
-    where T: Transport<Error = E>,
-          S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>>,
-{
+impl<T> Multiplex<T> where T: Dispatch {
     /// Create a new pipeline `Multiplex` dispatcher with the given service and
     /// transport
-    pub fn new(dispatch: S, transport: T) -> Multiplex<S, T> {
+    pub fn new(dispatch: T) -> Multiplex<T> {
         let frame_buf = FrameBuf::with_capacity(MAX_BUFFERED_FRAMES);
 
         Multiplex {
             run: true,
-            transport: transport,
-            out_bodies: HashMap::new(),
-            in_bodies: HashMap::new(),
-            is_flushed: true,
             dispatch: dispatch,
-            dispatch_deque: frame_buf.deque(),
+            exchanges: HashMap::new(),
+            is_flushed: true,
+            dispatch_deque: VecDeque::new(),
             frame_buf: frame_buf,
             scratch: vec![],
         }
@@ -119,16 +168,64 @@ impl<S, T, E> Multiplex<S, T>
 
     /// Returns true if the multiplexer has nothing left to do
     fn is_done(&self) -> bool {
-        !self.run && self.is_flushed && !self.dispatch.has_in_flight() && self.out_bodies.len() == 0
+        !self.run && self.is_flushed && self.exchanges.len() == 0
     }
 
-    fn read_out_frames(&mut self) -> io::Result<()> {
-        try!(self.flush_out_bodies());
+    /// Attempt to dispatch any outbound request messages
+    fn flush_dispatch_deque(&mut self) -> io::Result<()> {
+        while self.dispatch.poll_ready().is_ready() {
+            let id = match self.dispatch_deque.pop_front() {
+                Some(id) => id,
+                None => return Ok(()),
+            };
 
+            // Take the buffered inbound request
+            let message = self.exchanges.get_mut(&id)
+                .and_then(|exchange| exchange.take_buffered_out_request());
+
+            // If `None`, continue the loop
+            let message = match message {
+                Some(message) => message,
+                _ => continue,
+            };
+
+            try!(self.dispatch.dispatch((id, Ok(message))));
+        }
+
+        Ok(())
+    }
+
+    /// Dispatch any buffered outbound body frames to the sender
+    fn flush_out_bodies(&mut self) -> io::Result<()> {
+        trace!("flush out bodies");
+
+        self.scratch.clear();
+
+        for (id, exchange) in self.exchanges.iter_mut() {
+            trace!("   --> request={}", id);
+            try!(exchange.flush_out_body());
+
+            // If the exchange is complete, track it for removal
+            if exchange.is_complete() {
+                self.scratch.push(*id);
+            }
+        }
+
+        // Purge the scratch
+        for id in &self.scratch {
+            trace!("drop exchange; id={}", id);
+            self.exchanges.remove(id);
+        }
+
+        Ok(())
+    }
+
+    /// Read and process frames from transport
+    fn read_out_frames(&mut self) -> io::Result<()> {
         while self.run {
             // TODO: Only read frames if there is available space in the frame
             // buffer
-            if let Async::Ready(frame) = try!(self.transport.read()) {
+            if let Async::Ready(frame) = try!(self.dispatch.transport().read()) {
                 try!(self.process_out_frame(frame));
             } else {
                 break;
@@ -138,164 +235,158 @@ impl<S, T, E> Multiplex<S, T>
         Ok(())
     }
 
-    fn flush_dispatch_deque(&mut self) -> io::Result<()> {
-        while self.dispatch.is_ready() {
-            match self.dispatch_deque.pop() {
-                Some(Frame::Message(request_id, msg)) => {
-                    try!(self.dispatch.dispatch(request_id, Ok(msg)));
-                }
-                Some(Frame::Error(request_id, err)) => {
-                    try!(self.dispatch.dispatch(request_id, Err(err)));
-                }
-                Some(_) => panic!("unexpected dispatch frame"),
-                None => return Ok(()),
-            }
-        }
-
-        Ok(())
-    }
-
-    fn flush_out_bodies(&mut self) -> io::Result<()> {
-        trace!("flush out bodies");
-
-        self.scratch.clear();
-
-        for (id, body_sender) in self.out_bodies.iter_mut() {
-            body_sender.is_ready = true;
-
-            trace!("   --> request={}", id);
-
-            loop {
-                match body_sender.sender.poll_ready() {
-                    Ok(Async::Ready(())) => {
-                        trace!("   --> ready");
-
-                        // Pop a pending frame
-                        match body_sender.deque.pop() {
-                            Some(Frame::Body(_, Some(chunk))) => {
-                                trace!("   --> sending chunk");
-                                // Send the chunk
-                                body_sender.sender.send(Ok(chunk));
-                            }
-                            Some(Frame::Body(_, None)) => {
-                                trace!("   --> done, dropping");
-                                // Done sending the body chunks, drop the sender
-                                self.scratch.push(*id);
-                                break;
-                            }
-                            Some(Frame::Error(_, err)) => {
-                                trace!("   --> sending error");
-                                // Send the error
-                                body_sender.sender.send(Err(err));
-                            }
-                            Some(_) => unreachable!(),
-                            None => {
-                                trace!("   --> no queued frames");
-                                // No more frames to flush
-                                break;
-                            }
-                        }
-                    }
-                    Ok(Async::NotReady) => {
-                        trace!("   --> not ready");
-                        // Sender not ready
-                        body_sender.is_ready = false;
-                        break;
-                    }
-                    Err(_) => {
-                        // The receiving end dropped interest in the body
-                        // stream. In this case, the sender and the frame
-                        // buffer is dropped. If future body frames are
-                        // received, the sender will be gone and the frames
-                        // will be dropped.
-                        self.scratch.push(*id);
-                        break;
-                    }
-                }
-            }
-        }
-
-        // Purge the scratch
-        for request_id in &self.scratch {
-            trace!("drop out body handle; id={}", request_id);
-            self.out_bodies.remove(request_id);
-        }
-
-        Ok(())
-    }
-
-    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, E>) -> io::Result<()> {
+    /// Process outbound frame
+    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, T::Error>) -> io::Result<()> {
         trace!("Multiplex::process_out_frame");
+
         match frame {
-            Frame::Message(id, out_message) => {
-                trace!("   --> read out message; id={:?}", id);
-                try!(self.process_out_msg(id, Ok(out_message)));
+            Frame::Message { id, message, body } => {
+                if body {
+                    let (tx, rx) = stream::channel();
+                    let tx = Sender::new(tx);
+                    let message = Message::WithBody(message, rx);
+
+                    try!(self.process_out_message(id, message, Some(tx)));
+                } else {
+                    let message = Message::WithoutBody(message);
+
+                    try!(self.process_out_message(id, message, None));
+                }
             }
-            Frame::MessageWithBody(id, out_message, body_sender) => {
-                trace!("   --> read out message; id={:?}", id);
-
-                let body_sender = BodySender {
-                    deque: self.frame_buf.deque(),
-                    sender: body_sender.into(),
-                    is_ready: true,
-                };
-
-                // Store the sender
-                self.out_bodies.insert(id, body_sender);
-
-                // Process the actual message
-                try!(self.process_out_msg(id, Ok(out_message)));
-            }
-            Frame::Body(id, chunk) => {
+            Frame::Body { id, chunk } => {
                 trace!("   --> read out body chunk");
                 self.process_out_body_chunk(id, Ok(chunk));
             }
+            Frame::Error { id, error } => {
+                try!(self.process_out_err(id, error));
+            }
             Frame::Done => {
                 trace!("read Frame::Done");
-                assert!(self.in_bodies.len() == 0, "there are still in-bodies to process");
+                // TODO: Ensure all bodies have been completed
                 self.run = false;
-            }
-            Frame::Error(id, err) => {
-                try!(self.process_out_err(id, err));
             }
         }
 
         Ok(())
     }
 
-    fn process_out_err(&mut self, id: RequestId, err: T::Error) -> io::Result<()> {
-        trace!("   --> process error frame");
-        if self.out_bodies.contains_key(&id) {
-            trace!("   --> send error to body stream");
-            self.process_out_body_chunk(id, Err(err));
-            Ok(())
-        } else {
-            trace!("   --> send error to dispatcher");
-            self.process_out_msg(id, Err(err))
+    /// Process an outbound message
+    fn process_out_message(&mut self,
+                           id: RequestId,
+                           message: Message<T::Out, Body<T::BodyOut, T::Error>>,
+                           body: Option<Sender<T::BodyOut, T::Error>>)
+                           -> io::Result<()>
+    {
+        trace!("   --> process message; body={:?}", body.is_some());
+
+        match self.exchanges.entry(id) {
+            Entry::Occupied(mut e) => {
+                assert!(!e.get().responded, "invalid exchange state");
+                assert!(e.get().is_inbound());
+
+                // Dispatch the message
+                try!(self.dispatch.dispatch((id, Ok(message))));
+
+                // Track that the exchange has been responded to
+                e.get_mut().responded = true;
+
+                // Set the body sender
+                e.get_mut().out_body = body;
+
+                // If the exchange is complete, clean up resources
+                if e.get().is_complete() {
+                    e.remove();
+                }
+            }
+            Entry::Vacant(e) => {
+                if self.dispatch.poll_ready().is_ready() {
+                    trace!("   --> dispatch ready -- dispatching");
+
+                    // Only should be here if there are no queued messages
+                    assert!(self.dispatch_deque.is_empty());
+
+                    // Dispatch the message
+                    try!(self.dispatch.dispatch((id, Ok(message))));
+
+                    // Create the exchange state
+                    let mut exchange = Exchange::new(
+                        Request::Out(None),
+                        self.frame_buf.deque());
+
+                    exchange.out_body = body;
+
+                    // Track the exchange
+                    e.insert(exchange);
+                } else {
+                    trace!("   --> dispatch not ready");
+
+                    // Create the exchange state, including the buffered message
+                    let mut exchange = Exchange::new(
+                        Request::Out(Some(message)),
+                        self.frame_buf.deque());
+
+                    exchange.out_body = body;
+
+                    // Track the exchange state
+                    e.insert(exchange);
+
+                    // Track the request ID as pending dispatch
+                    self.dispatch_deque.push_back(id);
+                }
+            }
         }
+
+        Ok(())
     }
 
-    fn process_out_msg(&mut self, id: RequestId, msg: Result<T::Out, T::Error>) -> io::Result<()> {
-        if self.dispatch.is_ready() {
-            trace!("   --> dispatch ready -- dispatching");
+    // Process an error
+    fn process_out_err(&mut self, id: RequestId, err: T::Error) -> io::Result<()> {
+        trace!("   --> process error frame");
 
-            // Only should be here if there are no queued messages
-            assert!(self.dispatch_deque.is_empty());
+        let mut remove = false;
 
-            if let Err(_) = self.dispatch.dispatch(id, msg) {
-                // TODO: Should dispatch be infalliable
-                unimplemented!();
+        if let Some(exchange) = self.exchanges.get_mut(&id) {
+            if !exchange.is_dispatched() {
+                // The exchange is buffered and hasn't exited the multiplexer.
+                // At this point it is safe to just drop the state
+                remove = true;
+
+                assert!(exchange.out_body.is_none());
+                assert!(exchange.in_body.is_none());
+            } else if exchange.is_outbound() {
+                // Outbound exchanges can only have errors dispatched via the
+                // body
+                exchange.send_out_chunk(Err(err));
+
+                // The downstream dispatch has not provided a response to the
+                // exchange, indicate that interest has been canceled.
+                if !exchange.responded {
+                    try!(self.dispatch.cancel(id));
+                }
+
+                remove = exchange.is_complete();
+            } else {
+                if !exchange.responded {
+                    // A response has not been provided yet, send the error via
+                    // the dispatch
+                    let message = (id, Err(err));
+                    try!(self.dispatch.dispatch(message));
+
+                    exchange.responded = true;
+                } else {
+                    // A response has already been sent, send the error via the
+                    // body stream
+                    exchange.send_out_chunk(Err(err));
+                }
+
+                remove = exchange.is_complete();
             }
         } else {
-            trace!("   --> dispatch not ready");
+            trace!("   --> no in-flight exchange; dropping error");
+        }
 
-            // Queue the dispatch buffer
-            let frame = match msg {
-                Ok(msg) => Frame::Message(id, msg),
-                Err(e) => Frame::Error(id, e),
-            };
-
-            self.dispatch_deque.push(frame);
+        if remove {
+            self.exchanges.remove(&id);
         }
 
         Ok(())
@@ -304,68 +395,24 @@ impl<S, T, E> Multiplex<S, T>
     fn process_out_body_chunk(&mut self, id: RequestId, chunk: Result<Option<T::BodyOut>, T::Error>) {
         trace!("process out body chunk; id={:?}", id);
 
-        match self.out_bodies.get_mut(&id) {
-            Some(body_sender) => {
-                if body_sender.is_ready {
-                    trace!("   --> sender is ready");
-
-                    // Reverse Result & Option
-                    let chunk = match chunk {
-                        Ok(Some(v)) => Some(Ok(v)),
-                        Ok(None) => None,
-                        Err(e) => Some(Err(e)),
-                    };
-
-                    if let Some(chunk) = chunk {
-                        trace!("   --> send chunk");
-
-                        // Send the chunk
-                        body_sender.sender.send(chunk);
-
-                        // See if the sender is ready
-                        match body_sender.sender.poll_ready() {
-                            Ok(Async::Ready(_)) => {
-                                trace!("   --> ready for more");
-                                // The sender is ready for another message
-                                return;
-                            }
-                            Ok(Async::NotReady) => {
-                                // The sender is not ready for another message
-                                body_sender.is_ready = false;
-                                return;
-                            }
-                            Err(_) => {
-                                // The sender has canceled interest, fall
-                                // through and remove the body sender
-                            }
-                        }
-                    }
-
-                    trace!("   --> end of stream");
-
-                    assert!(body_sender.deque.is_empty());
-                    // Remote has dropped interest in the body. Fall through
-                    // and remove the body sender handle.
-                } else {
-                    trace!("   --> queueing chunk");
-
-                    let frame = match chunk {
-                        Ok(chunk) => Frame::Body(id, chunk),
-                        Err(e) => Frame::Error(id, e),
-                    };
-
-                    body_sender.deque.push(frame);
+        {
+            let exchange = match self.exchanges.get_mut(&id) {
+                Some(v) => v,
+                _ => {
+                    trace!("   --> exchange previously aborted; id={:?}", id);
                     return;
                 }
-            }
-            None => {
-                debug!("interest in body canceled");
+            };
+
+            exchange.send_out_chunk(chunk);
+
+            if !exchange.is_complete() {
                 return;
             }
         }
 
         trace!("dropping out body handle; id={:?}", id);
-        self.out_bodies.remove(&id);
+        self.exchanges.remove(&id);
     }
 
     fn write_in_frames(&mut self) -> io::Result<()> {
@@ -377,13 +424,32 @@ impl<S, T, E> Multiplex<S, T>
     fn write_in_messages(&mut self) -> io::Result<()> {
         trace!("write in messages");
 
-        while self.transport.poll_write().is_ready() {
+        while self.dispatch.transport().poll_write().is_ready() {
             trace!("   --> polling for in frame");
 
-            if let Some((id, msg)) = self.dispatch.poll() {
-                try!(self.write_in_message(id, msg));
-            } else {
-                break;
+            match try!(self.dispatch.poll()) {
+                Async::Ready(Some((id, Ok(message)))) => {
+                    trace!("   --> got message");
+                    try!(self.write_in_message(id, message));
+                }
+                Async::Ready(Some((id, Err(error)))) => {
+                    trace!("   --> got error");
+                    try!(self.write_in_error(id, error));
+                }
+                Async::Ready(None) => {
+                    trace!("   --> got None");
+                    // The service is done with the connection. In this case, a
+                    // `Done` frame should be written to the transport and the
+                    // transport should start shutting down.
+                    //
+                    // However, the `Done` frame should only be written once
+                    // all the in-flight bodies have been written.
+                    //
+                    // For now, do nothing...
+                    break;
+                }
+                // Nothing to dispatch
+                Async::NotReady => break,
             }
         }
 
@@ -392,60 +458,122 @@ impl<S, T, E> Multiplex<S, T>
         Ok(())
     }
 
-    fn write_in_message(&mut self, id: RequestId, message: Result<Message<S::InMsg, S::InBodyStream>, S::Error>) -> io::Result<()> {
-        match message {
-            Ok(Message::WithoutBody(val)) => {
-                trace!("got in_flight value without body");
-                try!(self.transport.write(Frame::Message(id, val)));
-            }
-            Ok(Message::WithBody(val, body)) => {
-                trace!("got in_flight value with body");
+    fn write_in_message(&mut self,
+                        id: RequestId,
+                        message: Message<T::In, T::Stream>)
+                        -> io::Result<()>
+    {
+        let (message, body) = match message {
+            Message::WithBody(message, rx) => (message, Some(rx)),
+            Message::WithoutBody(message) => (message, None),
+        };
 
-                // Write the in frame
-                try!(self.transport.write(Frame::Message(id, val)));
+        // Create the frame
+        let frame = Frame::Message {
+            id: id,
+            message: message,
+            body: body.is_some()
+        };
 
-                // Store the body stream for processing
-                self.in_bodies.insert(id, body);
+        // Write the frame
+        try!(self.dispatch.transport().write(frame));
+
+        match self.exchanges.entry(id) {
+            Entry::Occupied(mut e) => {
+                assert!(!e.get().responded, "invalid exchange state");
+                assert!(e.get().is_outbound());
+
+                // Track that the exchange has been responded to
+                e.get_mut().responded = true;
+
+                // Set the body receiver
+                e.get_mut().in_body = body;
+
+                // If the exchange is complete, clean up the resources
+                if e.get().is_complete() {
+                    e.remove();
+                }
             }
-            Err(e) => {
-                trace!("got in_flight error");
-                try!(self.transport.write(Frame::Error(id, e)));
+            Entry::Vacant(e) => {
+                // Create the exchange state
+                let exchange = Exchange::new(
+                    Request::In,
+                    self.frame_buf.deque());
+
+                // Track the exchange
+                e.insert(exchange);
             }
         }
 
         Ok(())
     }
 
+    fn write_in_error(&mut self,
+                      id: RequestId,
+                      error: T::Error)
+                      -> io::Result<()>
+    {
+        if let Entry::Occupied(mut e) = self.exchanges.entry(id) {
+            assert!(e.get().is_outbound(), "invalid state");
+            assert!(!e.get().responded, "exchange already responded");
+
+            // TODO: should the outbound body be canceled? In theory, if the
+            // consuming end doesn't want it anymore, it should drop interest
+            e.get_mut().out_body = None;
+            e.get_mut().out_deque.clear();
+
+            assert!(e.get().is_complete());
+
+            // Write the error frame
+            let frame = Frame::Error { id: id, error: error };
+            try!(self.dispatch.transport().write(frame));
+
+            e.remove();
+        }
+
+        Ok(())
+    }
+
     fn write_in_body(&mut self) -> io::Result<()> {
-        trace!("write in body chunks; handlers={}", self.in_bodies.len());
+        trace!("write in body chunks");
 
         self.scratch.clear();
 
         // Now, write the ready streams
         'outer:
-        for (id, body) in &mut self.in_bodies {
+        for (&id, exchange) in &mut self.exchanges {
             trace!("   --> checking request {:?}", id);
-            while self.transport.poll_write().is_ready() {
-                match body.poll() {
+
+            while self.dispatch.transport().poll_write().is_ready() {
+                match exchange.try_poll_in_body() {
                     Ok(Async::Ready(Some(chunk))) => {
                         trace!("   --> got chunk");
 
-                        // TODO: handle return value
-                        let frame = Frame::Body(*id, Some(chunk));
-                        try!(self.transport.write(frame));
+                        let frame = Frame::Body { id: id, chunk: Some(chunk) };
+                        try!(self.dispatch.transport().write(frame));
                     }
                     Ok(Async::Ready(None)) => {
                         trace!("   --> end of stream");
 
-                        let frame = Frame::Body(*id, None);
-                        try!(self.transport.write(frame));
-                        // In body stream fully written, remove the entry and
-                        // continue to the next body
-                        self.scratch.push(*id);
-                        continue 'outer;
+                        let frame = Frame::Body { id: id, chunk: None };
+                        try!(self.dispatch.transport().write(frame));
+
+                        // in_body is fully written.
+                        exchange.in_body = None;
+                        break;
                     }
-                    Err(_) => {
-                        unimplemented!();
+                    Err(error) => {
+                        // Write the error frame
+                        let frame = Frame::Error { id: id, error: error };
+                        try!(self.dispatch.transport().write(frame));
+
+                        exchange.responded = true;
+                        exchange.in_body = None;
+                        exchange.out_body = None;
+                        exchange.out_deque.clear();
+
+                        debug_assert!(exchange.is_complete());
+                        break;
                     }
                     Ok(Async::NotReady) => {
                         trace!("   --> no pending chunks");
@@ -454,31 +582,27 @@ impl<S, T, E> Multiplex<S, T>
                 }
             }
 
-            trace!("   --> transport not ready");
-
-            // At this point, the transport is no longer ready, so no further
-            // bodies can be processed
-            break;
+            if exchange.is_complete() {
+                self.scratch.push(id);
+            }
         }
 
         for id in &self.scratch {
             trace!("dropping in body handle; id={:?}", id);
-            self.in_bodies.remove(id);
+            self.exchanges.remove(id);
         }
 
         Ok(())
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.is_flushed = try!(self.transport.flush()).is_ready();
+        self.is_flushed = try!(self.dispatch.transport().flush()).is_ready();
         Ok(())
     }
 }
 
-impl<S, T, E> Future for Multiplex<S, T>
-    where T: Transport<Error = E>,
-          S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>>,
+impl<T> Future for Multiplex<T>
+    where T: Dispatch,
 {
     type Item = ();
     type Error = io::Error;
@@ -490,8 +614,11 @@ impl<S, T, E> Future for Multiplex<S, T>
         // Always flush the transport first
         try!(self.flush());
 
-        // Next try to dispatch any buffered messages
+        // Try to dispatch any buffered messages
         try!(self.flush_dispatch_deque());
+
+        // Try to send any buffered body chunks on their senders
+        try!(self.flush_out_bodies());
 
         // First read off data from the socket
         try!(self.read_out_frames());
@@ -501,6 +628,7 @@ impl<S, T, E> Future for Multiplex<S, T>
 
         // Since writing frames could un-block the dispatch, attempt to flush
         // the dispatch queue again.
+        // TODO: This is a hack and really shouldn't be relied on
         try!(self.flush_dispatch_deque());
 
         // Try flushing buffered writes
@@ -528,5 +656,175 @@ impl<S, T, E> Future for Multiplex<S, T>
 
         // Tick again later
         Ok(Async::NotReady)
+    }
+}
+
+impl<T: Dispatch> Exchange<T> {
+    fn new(request: Request<T>, deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>) -> Exchange<T> {
+        Exchange {
+            request: request,
+            responded: false,
+            out_body: None,
+            out_deque: deque,
+            out_is_ready: false,
+            in_body: None,
+        }
+    }
+
+    fn is_inbound(&self) -> bool {
+        match self.request {
+            Request::In => true,
+            Request::Out(_) => false,
+        }
+    }
+
+    fn is_outbound(&self) -> bool {
+        !self.is_inbound()
+    }
+
+    fn is_dispatched(&self) -> bool {
+        match self.request {
+            Request::Out(Some(_)) => false,
+            _ => true,
+        }
+    }
+
+    /// Returns true if the exchange is complete
+    fn is_complete(&self) -> bool {
+        // The exchange is completed if the response has been seen and bodies
+        // in both directions are fully flushed
+        self.responded && self.out_body.is_none() && self.in_body.is_none()
+    }
+
+    /// Takes the buffered out request out of the value and returns it
+    fn take_buffered_out_request(&mut self) -> Option<Message<T::Out, Body<T::BodyOut, T::Error>>> {
+        match self.request {
+            Request::Out(ref mut request) => request.take(),
+            _ => None,
+        }
+    }
+
+    fn send_out_chunk(&mut self, chunk: Result<Option<T::BodyOut>, T::Error>) {
+        // Reverse Result & Option
+        let chunk = match chunk {
+            Ok(Some(v)) => Some(Ok(v)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e)),
+        };
+
+        // Get a reference to the sender
+        {
+            let sender = match self.out_body {
+                Some(ref mut v) => v,
+                _ =>  {
+                    return;
+                }
+            };
+
+            if self.out_is_ready {
+                trace!("   --> send chunk; end-of-stream={:?}", chunk.is_none());
+
+                // If there is a chunk (vs. None which represents end of
+                // stream)
+                if let Some(chunk) = chunk {
+                    // Send the chunk
+                    sender.send(chunk);
+
+                    // See if the sender is ready again
+                    match sender.poll_ready() {
+                        Ok(Async::Ready(_)) => {
+                            trace!("   --> ready for more");
+                            // The sender is ready for another message
+                            return;
+                        }
+                        Ok(Async::NotReady) => {
+                            // The sender is not ready for another message
+                            self.out_is_ready = false;
+                            return;
+                        }
+                        Err(_) => {
+                            // The sender is complete, it should be removed
+                        }
+                    }
+                }
+
+                assert!(self.out_deque.is_empty());
+            } else {
+                trace!("   --> queueing chunk");
+
+                self.out_deque.push(chunk);
+                return;
+            }
+        }
+
+        self.out_is_ready = false;
+        self.out_body = None;
+    }
+
+    fn try_poll_in_body(&mut self) -> Poll<Option<T::BodyIn>, T::Error> {
+        match self.in_body {
+            Some(ref mut b) => b.poll(),
+            _ => Ok(Async::NotReady),
+        }
+    }
+
+    /// Write as many buffered body chunks to the sender
+    fn flush_out_body(&mut self) -> io::Result<()> {
+        {
+            let sender = match self.out_body {
+                Some(ref mut sender) => sender,
+                None => {
+                    assert!(self.out_deque.is_empty(), "pending out frames but no sender");
+                    return Ok(());
+                }
+            };
+
+            self.out_is_ready = true;
+
+            loop {
+                match sender.poll_ready() {
+                    Ok(Async::Ready(())) => {
+                        // Pop a pending frame
+                        match self.out_deque.pop() {
+                            Some(Some(Ok(chunk))) => {
+                                sender.send(Ok(chunk));
+                            }
+                            Some(Some(Err(e))) => {
+                                // Send the error then break as it is the final
+                                // chunk
+                                sender.send(Err(e));
+                                break;
+                            }
+                            Some(None) => {
+                                break;
+                            }
+                            None => {
+                                // No more frames to flush
+                                return Ok(());
+                            }
+                        }
+                    }
+                    Ok(Async::NotReady) => {
+                        trace!("   --> not ready");
+                        // Sender not ready
+                        self.out_is_ready = false;
+                        return Ok(());
+                    }
+                    Err(_) => {
+                        // The receiving end dropped interest in the body
+                        // stream. In this case, the sender and the frame
+                        // buffer is dropped. If future body frames are
+                        // received, the sender will be gone and the frames
+                        // will be dropped.
+                        break;
+                    }
+                }
+            }
+        }
+
+        // At this point, the outbound body is complete.
+        self.out_deque.clear();
+        self.out_body.take();
+        Ok(())
     }
 }

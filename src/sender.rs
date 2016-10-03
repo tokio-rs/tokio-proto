@@ -14,16 +14,25 @@ enum State<T, E> {
 }
 
 impl<T, E> Sender<T, E> {
+    pub fn new(inner: stream::Sender<T, E>) -> Sender<T, E> {
+        inner.into()
+    }
+
     pub fn send(&mut self, t: Result<T, E>) {
         trace!("Sender::send");
 
         match self.inner.take() {
             Some(State::Ready(sender)) => {
-                let busy = sender.send(t);
-                self.inner = Some(State::Busy(busy));
+                if t.is_ok() {
+                    let busy = sender.send(t);
+                    self.inner = Some(State::Busy(busy));
 
-                // Poll the sender to actually fire the message
-                let _ = self.poll_ready();
+                    // Poll the sender to actually fire the message
+                    let _ = self.poll_ready();
+                } else {
+                    let mut busy = sender.send(t);
+                    let _ = busy.poll();
+                }
             }
             _ => panic!("invalid internal state"),
         }

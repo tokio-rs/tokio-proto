@@ -15,34 +15,39 @@ use {Error, Message};
 use sender::Sender;
 use tokio_service::Service;
 use futures::stream::{self, Stream};
-use futures::{self, Future, BoxFuture, Complete, Async};
+use futures::{self, Future, Oneshot, Complete, Async, Poll};
 use std::io;
 use std::cell::RefCell;
 
 /// Client `Service` for pipeline or multiplex protocols
-pub struct Client<Req, Resp, ReqBody, E>
-    where ReqBody: Stream<Error = E>,
+pub struct Client<R1, R2, B1, B2, E>
+    where B1: Stream<Error = E>,
           E: From<Error<E>>,
 {
-    tx: RefCell<Sender<Envelope<Req, Resp, ReqBody, E>, io::Error>>,
+    tx: RefCell<Sender<Envelope<R1, R2, B1, B2, E>, io::Error>>,
+}
+
+/// Response future returned from a client
+pub struct Response<T, E> {
+    inner: Oneshot<Result<T, E>>,
 }
 
 /// Message used to dispatch requests to the task managing the client
 /// connection.
-type Envelope<Req, Resp, ReqBody, E> =
-    (Message<Req, ReqBody>, Complete<Result<Resp, E>>);
+type Envelope<R1, R2, B1, B2, E> =
+    (Message<R1, B1>, Complete<Result<Message<R2, B2>, E>>);
 
 /// A client / receiver pair
-pub type Pair<Req, Resp, ReqBody, E> =
-    (Client<Req, Resp, ReqBody, E>, Receiver<Req, Resp, ReqBody, E>);
+pub type Pair<R1, R2, B1, B2, E> =
+    (Client<R1, R2, B1, B2, E>, Receiver<R1, R2, B1, B2, E>);
 
 /// Receive requests submitted to the client
-pub type Receiver<Req, Resp, ReqBody, E> =
-    stream::Receiver<Envelope<Req, Resp, ReqBody, E>, io::Error>;
+pub type Receiver<R1, R2, B1, B2, E> =
+    stream::Receiver<Envelope<R1, R2, B1, B2, E>, io::Error>;
 
 /// Return a client handle and a handle used to receive requests on
-pub fn pair<Req, Resp, ReqBody, E>() -> Pair<Req, Resp, ReqBody, E>
-    where ReqBody: Stream<Error = E>,
+pub fn pair<R1, R2, B1, B2, E>() -> Pair<R1, R2, B1, B2, E>
+    where B1: Stream<Error = E>,
           E: From<Error<E>>,
 {
     // Create a stream
@@ -55,16 +60,17 @@ pub fn pair<Req, Resp, ReqBody, E>() -> Pair<Req, Resp, ReqBody, E>
     (client, rx)
 }
 
-impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
-    where Req: Send + 'static,
-          Resp: Send + 'static,
-          ReqBody: Stream<Error = E>,
-          E: From<Error<E>> + Send + 'static,
+impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
+    where R1: 'static,
+          R2: 'static,
+          B1: Stream<Error = E> + 'static,
+          B2: 'static,
+          E: From<Error<E>> + 'static,
 {
-    type Request = Message<Req, ReqBody>;
-    type Response = Resp;
+    type Request = Message<R1, B1>;
+    type Response = Message<R2, B2>;
     type Error = E;
-    type Future = BoxFuture<Self::Response, E>;
+    type Future = Response<Self::Response, E>;
 
     fn call(&self, request: Self::Request) -> Self::Future {
         let (tx, rx) = futures::oneshot();
@@ -72,10 +78,24 @@ impl<Req, Resp, ReqBody, E> Service for Client<Req, Resp, ReqBody, E>
         // TODO: handle error
         self.tx.borrow_mut().send(Ok((request, tx)));
 
-        rx.then(|t| t.unwrap()).boxed()
+        Response { inner: rx }
     }
 
     fn poll_ready(&self) -> Async<()> {
         self.tx.borrow_mut().poll_ready().unwrap()
+    }
+}
+
+impl<T, E> Future for Response<T, E> {
+    type Item = T;
+    type Error = E;
+
+    fn poll(&mut self) -> Poll<T, E> {
+        match self.inner.poll() {
+            Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
+            Ok(Async::Ready(Err(e))) => Err(e),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
+            Err(_) => panic!("aborted"),
+        }
     }
 }

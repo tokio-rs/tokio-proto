@@ -1,6 +1,6 @@
-use {Error, Message};
+use {Error, Message, Body};
 use super::{Frame, Transport};
-use futures::stream::{Stream, Sender, FutureSender};
+use futures::stream::{self, Stream, Sender, FutureSender};
 use futures::{Future, Poll, Async};
 use std::io;
 
@@ -11,46 +11,65 @@ use std::io;
 
 /// Provides protocol pipelining functionality in a generic way over clients
 /// and servers. Used internally by `pipeline::Client` and `pipeline::Server`.
-pub struct Pipeline<S, T>
-    where T: Transport,
-          S: Dispatch,
-{
+pub struct Pipeline<T> where T: Dispatch {
     // True as long as the connection has more request frames to read.
     run: bool,
-    // The transport wrapping the connection.
-    transport: T,
+
+    // Glues the service with the pipeline task
+    dispatch: T,
+
     // The `Sender` for the current request body stream
-    out_body: Option<BodySender<T::BodyOut, S::Error>>,
+    out_body: Option<BodySender<T::BodyOut, T::Error>>,
+
     // The response body stream
-    in_body: Option<S::InBodyStream>,
+    in_body: Option<T::Stream>,
+
     // True when the transport is fully flushed
     is_flushed: bool,
-    // Glues the service with the pipeline task
-    dispatch: S,
 }
 
+/// Message used to communicate through the multiplex dispatch
+pub type PipelineMessage<T, B, E> = Result<Message<T, B>, E>;
+
 /// Dispatch messages from the transport to the service
-pub trait Dispatch {
+pub trait Dispatch: 'static {
+
     /// Message written to transport
-    type InMsg;
+    type In: 'static;
 
     /// Body written to transport
-    type InBody;
+    type BodyIn: 'static;
+
+    /// Messages read from the transport
+    type Out: 'static;
+
+    /// Outbound body frame
+    type BodyOut: 'static;
+
+    /// Transport error
+    type Error: From<Error<Self::Error>> + 'static;
 
     /// Body stream written to transport
-    type InBodyStream: Stream<Item = Self::InBody, Error = Self::Error>;
+    type Stream: Stream<Item = Self::BodyIn, Error = Self::Error>;
 
-    type OutMsg;
+    /// Transport type
+    type Transport: Transport<In = Self::In,
+                          BodyIn = Self::BodyIn,
+                             Out = Self::Out,
+                         BodyOut = Self::BodyOut,
+                           Error = Self::Error>;
 
-    type Error;
+    /// Mutable reference to the transport
+    fn transport(&mut self) -> &mut Self::Transport;
 
     /// Process an out message
-    fn dispatch(&mut self, message: Self::OutMsg) -> io::Result<()>;
+    fn dispatch(&mut self, message: PipelineMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()>;
 
     /// Poll the next completed message
-    fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>>;
+    fn poll(&mut self) -> Poll<Option<PipelineMessage<Self::In, Self::Stream, Self::Error>>, io::Error>;
 
     /// RPC currently in flight
+    /// TODO: Get rid of
     fn has_in_flight(&self) -> bool;
 }
 
@@ -59,21 +78,16 @@ enum BodySender<B, E> {
     Busy(FutureSender<B, E>),
 }
 
-impl<S, T, E> Pipeline<S, T>
-    where T: Transport<Error = E>,
-          S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>>,
-{
+impl<T> Pipeline<T> where T: Dispatch {
     /// Create a new pipeline `Pipeline` dispatcher with the given service and
     /// transport
-    pub fn new(dispatch: S, transport: T) -> Pipeline<S, T> {
+    pub fn new(dispatch: T) -> Pipeline<T> {
         Pipeline {
             run: true,
-            transport: transport,
+            dispatch: dispatch,
             out_body: None,
             in_body: None,
             is_flushed: true,
-            dispatch: dispatch,
         }
     }
 
@@ -88,7 +102,7 @@ impl<S, T, E> Pipeline<S, T>
                 break;
             }
 
-            if let Async::Ready(frame) = try!(self.transport.read()) {
+            if let Async::Ready(frame) = try!(self.dispatch.transport().read()) {
                 try!(self.process_out_frame(frame));
             } else {
                 break;
@@ -124,43 +138,55 @@ impl<S, T, E> Pipeline<S, T>
         true
     }
 
-    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, E>) -> io::Result<()> {
+    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, T::Error>) -> io::Result<()> {
         trace!("process_out_frame");
         // At this point, the service & transport are ready to process the
         // frame, no matter what it is.
         match frame {
-            Frame::Message(out_message) => {
-                trace!("read out message");
-                // There is no streaming body. Set `out_body` to `None` so that
-                // the previous body stream is dropped.
-                self.out_body = None;
+            Frame::Message { message, body } => {
+                if body {
+                    trace!("read out message with body");
 
-                if let Err(_) = self.dispatch.dispatch(out_message) {
-                    // TODO: Should dispatch be infalliable
-                    unimplemented!();
+                    let (tx, rx) = stream::channel();
+                    let message = Message::WithBody(message, rx);
+
+                    // Track the out body sender. If `self.out_body`
+                    // currently holds a sender for the previous out body, it
+                    // will get dropped. This terminates the stream.
+                    self.out_body = Some(BodySender::Ready(tx));
+
+                    if let Err(_) = self.dispatch.dispatch(Ok(message)) {
+                        // TODO: Should dispatch be infallible
+                        unimplemented!();
+                    }
+                } else {
+                    trace!("read out message");
+
+                    let message = Message::WithoutBody(message);
+
+                    // There is no streaming body. Set `out_body` to `None` so that
+                    // the previous body stream is dropped.
+                    self.out_body = None;
+
+                    if let Err(_) = self.dispatch.dispatch(Ok(message)) {
+                        // TODO: Should dispatch be infalliable
+                        unimplemented!();
+                    }
                 }
             }
-            Frame::MessageWithBody(out_message, body_sender) => {
-                trace!("read out message with body");
-                // Track the out body sender. If `self.out_body`
-                // currently holds a sender for the previous out body, it
-                // will get dropped. This terminates the stream.
-                self.out_body = Some(BodySender::Ready(body_sender));
-
-                if let Err(_) = self.dispatch.dispatch(out_message) {
-                    // TODO: Should dispatch be infallible
-                    unimplemented!();
+            Frame::Body { chunk } => {
+                match chunk {
+                    Some(chunk) => {
+                        trace!("read out body chunk");
+                        try!(self.process_out_body_chunk(chunk));
+                    }
+                    None => {
+                        trace!("read out body EOF");
+                        // Drop the sender.
+                        // TODO: Ensure a sender exists
+                        let _ = self.out_body.take();
+                    }
                 }
-            }
-            Frame::Body(Some(chunk)) => {
-                trace!("read out body chunk");
-                try!(self.process_out_body_chunk(chunk));
-            }
-            Frame::Body(None) => {
-                trace!("read out body EOF");
-                // Drop the sender.
-                // TODO: Ensure a sender exists
-                let _ = self.out_body.take();
             }
             Frame::Done => {
                 trace!("read Frame::Done");
@@ -169,7 +195,7 @@ impl<S, T, E> Pipeline<S, T>
                 // through the read-cycle again.
                 self.run = false;
             }
-            Frame::Error(_) => {
+            Frame::Error { .. } => {
                 // At this point, the transport is toast, there
                 // isn't much else that we can do. Killing the task
                 // will cause all in-flight requests to abort, but
@@ -218,7 +244,7 @@ impl<S, T, E> Pipeline<S, T>
 
     fn write_in_frames(&mut self) -> io::Result<()> {
         trace!("write_in_frames");
-        while self.transport.poll_write().is_ready() {
+        while self.dispatch.transport().poll_write().is_ready() {
             // Ensure the current in body is fully written
             if !try!(self.write_in_body()) {
                 debug!("write in body not done");
@@ -227,22 +253,36 @@ impl<S, T, E> Pipeline<S, T>
             debug!("write in body done");
 
             // Write the next in-flight in message
-            if let Some(resp) = self.dispatch.poll() {
-                try!(self.write_in_message(resp));
-            } else {
-                break;
+            match try!(self.dispatch.poll()) {
+                Async::Ready(Some(Ok(message))) => {
+                    trace!("   --> got message");
+                    try!(self.write_in_message(Ok(message)));
+                }
+                Async::Ready(Some(Err(error))) => {
+                    trace!("   --> got error");
+                    try!(self.write_in_message(Err(error)));
+                }
+                Async::Ready(None) => {
+                    trace!("   --> got None");
+                    // The service is done with the connection. In this case, a
+                    // `Done` frame should be written to the transport and the
+                    // transport should start shutting down.
+                    unimplemented!();
+                }
+                // Nothing to dispatch
+                Async::NotReady => break,
             }
         }
 
         Ok(())
     }
 
-    fn write_in_message(&mut self, message: Result<Message<S::InMsg, S::InBodyStream>, S::Error>) -> io::Result<()> {
+    fn write_in_message(&mut self, message: Result<Message<T::In, T::Stream>, T::Error>) -> io::Result<()> {
         trace!("write_in_message");
         match message {
             Ok(Message::WithoutBody(val)) => {
                 trace!("got in_flight value without body");
-                try!(self.transport.write(Frame::Message(val)));
+                try!(self.dispatch.transport().write(Frame::Message { message: val, body: false }));
 
                 // TODO: don't panic maybe if this isn't true?
                 assert!(self.in_body.is_none());
@@ -252,7 +292,7 @@ impl<S, T, E> Pipeline<S, T>
             }
             Ok(Message::WithBody(val, body)) => {
                 trace!("got in_flight value with body");
-                try!(self.transport.write(Frame::Message(val)));
+                try!(self.dispatch.transport().write(Frame::Message { message: val, body: true }));
 
                 // TODO: don't panic maybe if this isn't true?
                 assert!(self.in_body.is_none());
@@ -262,7 +302,7 @@ impl<S, T, E> Pipeline<S, T>
             }
             Err(e) => {
                 trace!("got in_flight error");
-                try!(self.transport.write(Frame::Error(e)));
+                try!(self.dispatch.transport().write(Frame::Error { error: e }));
             }
         }
 
@@ -273,10 +313,10 @@ impl<S, T, E> Pipeline<S, T>
     fn write_in_body(&mut self) -> io::Result<bool> {
         trace!("write_in_body");
         if let Some(ref mut body) = self.in_body {
-            while self.transport.poll_write().is_ready() {
+            while self.dispatch.transport().poll_write().is_ready() {
                 match body.poll() {
                     Ok(Async::Ready(Some(chunk))) => {
-                        let r = try!(self.transport.write(Frame::Body(Some(chunk))));
+                        let r = try!(self.dispatch.transport().write(Frame::Body { chunk: Some(chunk) }));
 
                         // TODO: This doesn't seem correct anymore
                         if !r.is_ready() {
@@ -284,7 +324,7 @@ impl<S, T, E> Pipeline<S, T>
                         }
                     }
                     Ok(Async::Ready(None)) => {
-                        try!(self.transport.write(Frame::Body(None)));
+                        try!(self.dispatch.transport().write(Frame::Body { chunk: None }));
                         // Response body flushed, let fall through
                     }
                     Err(_) => {
@@ -303,16 +343,12 @@ impl<S, T, E> Pipeline<S, T>
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.is_flushed = try!(self.transport.flush()).is_ready();
+        self.is_flushed = try!(self.dispatch.transport().flush()).is_ready();
         Ok(())
     }
 }
 
-impl<S, T, E> Future for Pipeline<S, T>
-    where T: Transport<Error = E>,
-          S: Dispatch<InMsg = T::In, InBody = T::BodyIn, OutMsg = T::Out, Error = E>,
-          E: From<Error<E>>,
-{
+impl<T> Future for Pipeline<T> where T: Dispatch {
     type Item = ();
     type Error = io::Error;
 

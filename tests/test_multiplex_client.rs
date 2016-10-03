@@ -11,7 +11,7 @@ extern crate env_logger;
 mod support;
 
 use futures::{Future, oneshot};
-use futures::stream::{self, Stream, Receiver};
+use futures::stream::{Stream, Receiver};
 use support::mock;
 use tokio_service::Service;
 use tokio_proto::Message;
@@ -19,7 +19,6 @@ use tokio_proto::multiplex::{self, Frame, RequestId};
 use tokio_core::reactor::Core;
 use std::io;
 use std::thread;
-use std::cell::RefCell;
 use std::sync::mpsc;
 
 // The message type is a static string for both the request and response
@@ -30,13 +29,13 @@ type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<Message<Msg, Body>, u32, io::Error>;
+type OutFrame = Frame<Msg, u32, io::Error>;
 
 // Transport handle
 type TransportHandle = mock::TransportHandle<InFrame, OutFrame>;
 
 // Client handle
-type Client = tokio_proto::Client<&'static str, Message<Msg, Body>, Body, io::Error>;
+type Client = tokio_proto::Client<Msg, Msg, Body, Body, io::Error>;
 
 #[test]
 fn test_ping_pong_close() {
@@ -67,7 +66,11 @@ fn test_error_on_response() {
         assert_eq!(Some(0), wr.request_id());
         assert_eq!("ping", wr.unwrap_msg());
 
-        mock.send(multiplex::Frame::Error(0, io::Error::new(io::ErrorKind::Other, "nope")));
+        mock.send(multiplex::Frame::Error {
+            id: 0,
+            error: io::Error::new(io::ErrorKind::Other, "nope"),
+        });
+
         assert_eq!(io::ErrorKind::Other, pong.wait().unwrap_err().kind());
 
         mock.send(multiplex::Frame::Done);
@@ -99,11 +102,11 @@ fn drop_client_while_streaming_body() {
         // Send body frames
         for i in 0..3 {
             mock.allow_write();
-            mock.send(multiplex::Frame::Body(0, Some(i)));
+            mock.send(multiplex::Frame::Body { id: 0, chunk: Some(i) });
         }
 
         mock.allow_write();
-        mock.send(multiplex::Frame::Body(0, None));
+        mock.send(multiplex::Frame::Body { id: 0, chunk: None });
 
         mock.send(multiplex::Frame::Done);
         mock.allow_write();
@@ -116,12 +119,19 @@ fn drop_client_while_streaming_body() {
 }
 
 fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
-    Frame::Message(request_id, Message::WithoutBody(msg))
+    Frame::Message {
+        id: request_id,
+        message: msg,
+        body: false,
+    }
 }
 
 fn msg_with_body(request_id: RequestId, msg: Msg) -> OutFrame {
-    let (tx, rx) = stream::channel();
-    Frame::MessageWithBody(request_id, Message::WithBody(msg, rx), tx)
+    Frame::Message {
+        id: request_id,
+        message: msg,
+        body: true,
+    }
 }
 
 /// Setup a reactor running a multiplex::Client and a mock transport. Yields the
@@ -137,10 +147,7 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
         let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
 
         let transport = new_transport.new_transport().unwrap();
-        let transport = RefCell::new(Some(transport));
-        let new_transport = move || Ok(transport.borrow_mut().take().unwrap());
-
-        let service = multiplex::connect(new_transport, &handle);
+        let service = multiplex::connect(Ok(transport), &handle);
 
         tx2.send((mock, service)).unwrap();
         lp.run(rx)

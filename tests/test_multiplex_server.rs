@@ -22,6 +22,7 @@ use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::time::Duration;
 
 // The message type is a static string for both the request and response
 type Msg = &'static str;
@@ -31,7 +32,7 @@ type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<Message<Msg, Body>, u32, io::Error>;
+type OutFrame = Frame<Msg, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
@@ -135,8 +136,13 @@ fn test_same_order_multiplexing() {
         let c3 = rx.recv().unwrap();
 
         mock.assert_no_write(20);
+
         c1.complete(Ok(Message::WithoutBody("one")));
+        thread::sleep(Duration::from_millis(20));
+
         c2.complete(Ok(Message::WithoutBody("two")));
+        thread::sleep(Duration::from_millis(20));
+
         c3.complete(Ok(Message::WithoutBody("three")));
 
         let wr = mock.next_write();
@@ -261,7 +267,7 @@ fn test_reaching_max_in_flight_requests() {
     let c2 = c1.clone();
 
     let service = tokio_service::simple_service(move |_| {
-        c2.fetch_add(1, Ordering::Relaxed);
+        c2.fetch_add(1, Ordering::SeqCst);
         let fut = rx.lock().unwrap().recv().unwrap();
         fut.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
            .and_then(|res| res)
@@ -282,10 +288,10 @@ fn test_reaching_max_in_flight_requests() {
         mock.assert_no_write(100);
 
         // Only 32 requests processed
-        assert_eq!(32, c1.load(Ordering::Relaxed));
+        assert_eq!(32, c1.load(Ordering::SeqCst));
 
-        // Pick a random request to complete
-        rand::thread_rng().shuffle(&mut responses);
+        // Pick one from the first 32 requests to complete.
+        rand::thread_rng().shuffle(&mut responses[0..32]);
         let (i, c) = responses.remove(0);
 
         c.complete(Ok(Message::WithoutBody("zomg")));
@@ -293,7 +299,7 @@ fn test_reaching_max_in_flight_requests() {
         mock.assert_no_write(50);
 
         // Next request not yet processed
-        assert_eq!(32, c1.load(Ordering::Relaxed));
+        assert_eq!(32, c1.load(Ordering::SeqCst));
 
         // allow the write
         mock.allow_write();
@@ -306,7 +312,7 @@ fn test_reaching_max_in_flight_requests() {
         mock.assert_no_write(50);
 
         // Next request is processed
-        assert_eq!(33, c1.load(Ordering::Relaxed));
+        assert_eq!(33, c1.load(Ordering::SeqCst));
     });
 }
 
@@ -389,14 +395,14 @@ fn test_basic_streaming_request_body_read_then_respond() {
             mock.assert_no_write(20);
 
             // Send a body chunk
-            mock.send(Frame::Body(2, Some(i)));
+            mock.send(Frame::Body { id: 2, chunk: Some(i) });
 
             // Assert service processed chunk
             assert_eq!(i, rx.recv().unwrap());
         }
 
         // Send end-of-stream notification
-        mock.send(Frame::Body(2, None));
+        mock.send(Frame::Body { id: 2, chunk: None });
 
         let wr = mock.next_write();
         assert_eq!(Some(2), wr.request_id());
@@ -442,33 +448,33 @@ fn test_interleaving_request_body_chunks() {
                 mock.assert_no_write(20);
 
                 // Send a body chunk
-                mock.send(Frame::Body(2, Some(i)));
+                mock.send(Frame::Body { id: 2, chunk: Some(i) });
                 assert_eq!((0, i), rx.recv().unwrap());
 
-                mock.send(Frame::Body(4, Some(i)));
+                mock.send(Frame::Body { id: 4, chunk: Some(i) });
                 assert_eq!((1, i), rx.recv().unwrap());
             } else {
                 // No write yet
                 mock.assert_no_write(20);
 
-                mock.send(Frame::Body(4, Some(i)));
+                mock.send(Frame::Body { id: 4, chunk: Some(i) });
                 assert_eq!((1, i), rx.recv().unwrap());
 
                 // Send a body chunk
-                mock.send(Frame::Body(2, Some(i)));
+                mock.send(Frame::Body { id: 2, chunk: Some(i) });
                 assert_eq!((0, i), rx.recv().unwrap());
             }
         }
 
         // Send end-of-stream notification
-        mock.send(Frame::Body(2, None));
+        mock.send(Frame::Body { id: 2, chunk: None });
 
         let wr = mock.next_write();
         assert_eq!(Some(2), wr.request_id());
         assert_eq!("hi2u", wr.unwrap_msg());
 
         mock.allow_write();
-        mock.send(Frame::Body(4, None));
+        mock.send(Frame::Body { id: 4, chunk: None });
 
         let wr = mock.next_write();
         assert_eq!(Some(4), wr.request_id());
@@ -505,7 +511,7 @@ fn test_read_error_as_first_frame() {
 
     run(service, |mock| {
         mock.allow_write();
-        mock.send(Frame::Error(1, io::Error::new(io::ErrorKind::Other, "boom")));
+        mock.send(Frame::Error { id: 1, error: io::Error::new(io::ErrorKind::Other, "boom") });
 
         mock.send(Frame::Done);
         mock.allow_and_assert_drop();
@@ -516,6 +522,15 @@ fn test_read_error_as_first_frame() {
 fn test_read_error_during_stream() {
 }
 
+#[test]
+fn test_error_handling_before_message_dispatched() {
+    /*
+    let service = tokio_service::simple_service(|_| {
+        unimplemented!();
+    });
+    */
+}
+
 fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
     let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
@@ -523,12 +538,19 @@ fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
 }
 
 fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
-    Frame::Message(request_id, Message::WithoutBody(msg))
+    Frame::Message {
+        id: request_id,
+        message: msg,
+        body: false,
+    }
 }
 
-fn msg_with_body(request_id: RequestId, msg: Msg) -> OutFrame {
-    let (tx, rx) = stream::channel();
-    Frame::MessageWithBody(request_id, Message::WithBody(msg, rx), tx)
+fn msg_with_body(request_id: RequestId, message: Msg) -> OutFrame {
+    Frame::Message {
+        id: request_id,
+        message: message,
+        body: true,
+    }
 }
 
 /// Setup a reactor running a multiplex::Server with the given service and a

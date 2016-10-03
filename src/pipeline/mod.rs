@@ -28,80 +28,59 @@ mod client;
 mod server;
 mod pipeline;
 
+pub use self::pipeline::{Pipeline, PipelineMessage, Dispatch};
 pub use self::server::Server;
 pub use self::client::connect;
 
-use {Message};
+use {Error};
 use tokio_core::io::FramedIo;
-use tokio_service::Service;
-use futures::{Async, Future, IntoFuture, Poll};
-use futures::stream::{Stream, Sender};
-use take::Take;
+use futures::{Async, Poll};
 use std::{fmt, io};
 
 /// A pipelined protocol frame
 pub enum Frame<T, B, E> {
     /// Either a request or a response
-    Message(T),
-    /// Returned by `Transport::read` when a streaming body will follow.
-    /// Subsequent body frames will be proxied to the provided `Sender`.
-    ///
-    /// Calling `Transport::write` with Frame::MessageWithBody is an error.
-    MessageWithBody(T, Sender<B, E>),
+    Message {
+        /// The message value
+        message: T,
+        /// Set to true when body frames will follow with the same request ID.
+        body: bool,
+    },
     /// Body frame. None indicates that the body is done streaming.
-    Body(Option<B>),
+    Body {
+        /// Body chunk. Setting to `None` indicates that the body is done
+        /// streaming and there will be no further body frames sent with the
+        /// given request ID.
+        chunk: Option<B>,
+    },
     /// Error
-    Error(E),
+    Error {
+        /// Error value
+        error: E,
+    },
     /// Final frame sent in each transport direction
     Done,
-}
-
-/// A specialization of `Service` supporting the requirements of server
-/// pipelined services
-///
-/// `Service` should be implemented instead of this trait.
-pub trait ServerService {
-    /// Requests handled by the service.
-    type Request;
-
-    /// Responses given by the service.
-    type Response;
-
-    /// Response body chunk
-    type Body;
-
-    /// Response body stream
-    type BodyStream: Stream<Item = Self::Body, Error = Self::Error>;
-
-    /// Errors produced by the service.
-    type Error;
-
-    /// The future response value.
-    type Future: Future<Item = Message<Self::Response, Self::BodyStream>, Error = Self::Error>;
-
-    /// Process the request and return the response asynchronously.
-    fn call(&self, req: Self::Request) -> Self::Future;
 }
 
 /// A specialization of `io::Transport` supporting the requirements of
 /// pipeline based protocols.
 ///
 /// `io::Transport` should be implemented instead of this trait.
-pub trait Transport {
+pub trait Transport: 'static {
     /// Messages written to the transport
-    type In;
+    type In: 'static;
 
     /// Inbound body frame
-    type BodyIn;
+    type BodyIn: 'static;
 
     /// Messages read from the transport
-    type Out;
+    type Out: 'static;
 
     /// Outbound body frame
-    type BodyOut;
+    type BodyOut: 'static;
 
     /// Transport error
-    type Error;
+    type Error: From<Error<Self::Error>> + 'static;
 
     /// Tests to see if this Transport may be readable.
     fn poll_read(&mut self) -> Async<()>;
@@ -119,40 +98,6 @@ pub trait Transport {
     fn flush(&mut self) -> Poll<(), io::Error>;
 }
 
-/// A specialization of `io::NewTransport` supporting the requirements of
-/// pipeline based protocols.
-///
-/// `io::NewTransport` should be implemented instead of this trait.
-pub trait NewTransport {
-    /// Messages written to the transport
-    type In;
-
-    /// Inbound streaming body
-    type BodyIn;
-
-    /// Messages read from the transport
-    type Out;
-
-    /// Outbound streaming body
-    type BodyOut;
-
-    /// Errors
-    type Error;
-
-    /// Transport returned
-    type Item: Transport<In = Self::In,
-                     BodyIn = Self::BodyIn,
-                        Out = Self::Out,
-                    BodyOut = Self::BodyOut,
-                      Error = Self::Error>;
-
-    /// The Future transport
-    type Future: Future<Item = Self::Item, Error = io::Error>;
-
-    /// Create and return a new `Transport`
-    fn new_transport(&self) -> Self::Future;
-}
-
 /*
  *
  * ===== impl Frame =====
@@ -163,10 +108,9 @@ impl<T, B, E> Frame<T, B, E> {
     /// Unwraps a frame, yielding the content of the `Message`.
     pub fn unwrap_msg(self) -> T {
         match self {
-            Frame::Message(v) => v,
-            Frame::MessageWithBody(v, _) => v,
-            Frame::Body(..) => panic!("called `Frame::unwrap_msg()` on a `Body` value"),
-            Frame::Error(..) => panic!("called `Frame::unwrap_msg()` on an `Error` value"),
+            Frame::Message { message, .. } => message,
+            Frame::Body { .. } => panic!("called `Frame::unwrap_msg()` on a `Body` value"),
+            Frame::Error { .. } => panic!("called `Frame::unwrap_msg()` on an `Error` value"),
             Frame::Done => panic!("called `Frame::unwrap_msg()` on a `Done` value"),
         }
     }
@@ -174,10 +118,9 @@ impl<T, B, E> Frame<T, B, E> {
     /// Unwraps a frame, yielding the content of the `Body`.
     pub fn unwrap_body(self) -> Option<B> {
         match self {
-            Frame::Body(v) => v,
-            Frame::Message(..) => panic!("called `Frame::unwrap_body()` on a `Message` value"),
-            Frame::MessageWithBody(..) => panic!("called `Frame::unwrap_body()` on a `MessageWithBody` value"),
-            Frame::Error(..) => panic!("called `Frame::unwrap_body()` on an `Error` value"),
+            Frame::Body { chunk } => chunk,
+            Frame::Message { .. } => panic!("called `Frame::unwrap_body()` on a `Message` value"),
+            Frame::Error { .. } => panic!("called `Frame::unwrap_body()` on an `Error` value"),
             Frame::Done => panic!("called `Frame::unwrap_body()` on a `Done` value"),
         }
     }
@@ -185,10 +128,9 @@ impl<T, B, E> Frame<T, B, E> {
     /// Unwraps a frame, yielding the content of the `Error`.
     pub fn unwrap_err(self) -> E {
         match self {
-            Frame::Error(e) => e,
-            Frame::Body(..) => panic!("called `Frame::unwrap_err()` on a `Body` value"),
-            Frame::Message(..) => panic!("called `Frame::unwrap_err()` on a `Message` value"),
-            Frame::MessageWithBody(..) => panic!("called `Frame::unwrap_err()` on a `MessageWithBody` value"),
+            Frame::Error { error } => error,
+            Frame::Body { .. } => panic!("called `Frame::unwrap_err()` on a `Body` value"),
+            Frame::Message { .. } => panic!("called `Frame::unwrap_err()` on a `Message` value"),
             Frame::Done => panic!("called `Frame::unwrap_message()` on a `Done` value"),
         }
     }
@@ -209,34 +151,24 @@ impl<T, B, E> fmt::Debug for Frame<T, B, E>
 {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Frame::Message(ref v) => write!(fmt, "Frame::Message({:?})", v),
-            Frame::MessageWithBody(ref v, _) => write!(fmt, "Frame::MessageWithBody({:?}, Sender)", v),
-            Frame::Body(ref v) => write!(fmt, "Frame::Body({:?})", v),
-            Frame::Error(ref v) => write!(fmt, "Frame::Error({:?})", v),
+            Frame::Message { ref message, body } => {
+                fmt.debug_struct("Frame::Message")
+                    .field("message", message)
+                    .field("body", &body)
+                    .finish()
+            }
+            Frame::Body { ref chunk } => {
+                fmt.debug_struct("Frame::Body")
+                    .field("chunk", chunk)
+                    .finish()
+            }
+            Frame::Error { ref error } => {
+                fmt.debug_struct("Frame::Error")
+                    .field("error", error)
+                    .finish()
+            },
             Frame::Done => write!(fmt, "Frame::Done"),
         }
-    }
-}
-
-/*
- *
- * ===== impl ServerService =====
- *
- */
-
-impl<S, Response, Body, BodyStream> ServerService for S
-    where S: Service<Response = Message<Response, BodyStream>>,
-          BodyStream: Stream<Item = Body, Error = S::Error>,
-{
-    type Request = S::Request;
-    type Response = Response;
-    type Body = Body;
-    type BodyStream = BodyStream;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        Service::call(self, req)
     }
 }
 
@@ -247,7 +179,12 @@ impl<S, Response, Body, BodyStream> ServerService for S
  */
 
 impl<T, M1, M2, B1, B2, E> Transport for T
-    where T: FramedIo<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>>,
+    where T: FramedIo<In = Frame<M1, B1, E>, Out = Frame<M2, B2, E>> + 'static,
+          E: From<Error<E>> + 'static,
+          M1: 'static,
+          M2: 'static,
+          B1: 'static,
+          B2: 'static,
 {
     type In = M1;
     type BodyIn = B1;
@@ -273,47 +210,5 @@ impl<T, M1, M2, B1, B2, E> Transport for T
 
     fn flush(&mut self) -> Poll<(), io::Error> {
         FramedIo::flush(self)
-    }
-}
-
-/*
- *
- * ===== impl NewTransport =====
- *
- */
-
-impl<F, R, T> NewTransport for F
-    where F: Fn() -> R,
-          R: IntoFuture<Item = T, Error = io::Error>,
-          T: Transport,
-{
-    type In = T::In;
-    type BodyIn = T::BodyIn;
-    type Out = T::Out;
-    type BodyOut = T::BodyOut;
-    type Error = T::Error;
-    type Item = T;
-    type Future = R::Future;
-
-    fn new_transport(&self) -> Self::Future {
-        self().into_future()
-    }
-}
-
-impl<F, R, T> NewTransport for Take<F>
-    where F: FnOnce() -> R,
-          R: IntoFuture<Item = T, Error = io::Error>,
-          T: Transport,
-{
-    type In = T::In;
-    type BodyIn = T::BodyIn;
-    type Out = T::Out;
-    type BodyOut = T::BodyOut;
-    type Error = T::Error;
-    type Item = T;
-    type Future = R::Future;
-
-    fn new_transport(&self) -> Self::Future {
-        self.take()().into_future()
     }
 }

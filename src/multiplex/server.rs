@@ -1,20 +1,26 @@
-use {Error, Message};
-use super::{multiplex, RequestId, ServerService, Transport};
+use {Message, Body};
+use super::{multiplex, RequestId, Transport, Multiplex, MultiplexMessage};
+use tokio_service::Service;
 use futures::{Future, Poll, Async};
+use futures::stream::Stream;
 use std::io;
 
 /// A server `Task` that dispatches `Transport` messages to a `Service` using
 /// protocol multiplexing.
-pub struct Server<S, T>
-    where S: ServerService,
-          T: Transport,
+pub struct Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error> + 'static,
 {
-    inner: multiplex::Multiplex<Dispatch<S>, T>,
+    inner: Multiplex<Dispatch<S, T>>,
 }
 
-struct Dispatch<S: ServerService> {
+struct Dispatch<S, T> where S: Service {
     // The service handling the connection
     service: S,
+    transport: T,
     in_flight: Vec<(RequestId, InFlight<S::Future>)>,
 }
 
@@ -32,48 +38,51 @@ const MAX_IN_FLIGHT_REQUESTS: usize = 32;
  *
  */
 
-impl<T, S, E> Server<S, T>
-    where T: Transport<Error = E>,
-          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>>,
+impl<S, T, B> Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     /// Create a new pipeline `Server` dispatcher with the given service and
     /// transport
-    pub fn new(service: S, transport: T) -> Server<S, T> {
+    pub fn new(service: S, transport: T) -> Server<S, T, B> {
         let dispatch = Dispatch {
             service: service,
+            transport: transport,
             in_flight: vec![],
         };
 
         // Create the multiplexer
-        let multiplex = multiplex::Multiplex::new(dispatch, transport);
+        let multiplex = Multiplex::new(dispatch);
 
         // Return the server task
         Server { inner: multiplex }
     }
 }
 
-impl<S> multiplex::Dispatch for Dispatch<S>
-    where S: ServerService,
+impl<S, T, B> multiplex::Dispatch for Dispatch<S, T>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error> + 'static,
 {
-    type InMsg = S::Response;
-    type InBody = S::Body;
-    type InBodyStream = S::BodyStream;
-    type OutMsg = S::Request;
-    type Error = S::Error;
 
-    fn dispatch(&mut self, request_id: RequestId, request: Result<Self::OutMsg, S::Error>) -> io::Result<()> {
-        if let Ok(request) = request {
-            let response = self.service.call(request);
-            self.in_flight.push((request_id, InFlight::Active(response)));
-        }
+    type In = T::In;
+    type BodyIn = T::BodyIn;
+    type Out = T::Out;
+    type BodyOut = T::BodyOut;
+    type Error = T::Error;
+    type Stream = B;
+    type Transport = T;
 
-        // TODO: Should the error be handled differently?
-
-        Ok(())
+    fn transport(&mut self) -> &mut T {
+        &mut self.transport
     }
 
-    fn poll(&mut self) -> Option<(RequestId, Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>)> {
+    fn poll(&mut self) -> Poll<Option<MultiplexMessage<Self::In, B, Self::Error>>, io::Error> {
         trace!("Dispatch::poll");
 
         let mut idx = None;
@@ -86,26 +95,49 @@ impl<S> multiplex::Dispatch for Dispatch<S>
         }
 
         if let Some(idx) = idx {
-            let (request_id, msg) = self.in_flight.remove(idx);
-            Some((request_id, msg.unwrap_done()))
+            // let (request_id, message) = self.in_flight.remove(idx);
+            let (request_id, message) = self.in_flight.remove(idx);
+            let message = (request_id, message.unwrap_done());
+
+            Ok(Async::Ready(Some(message)))
         } else {
-            None
+            Ok(Async::NotReady)
         }
     }
 
-    fn is_ready(&self) -> bool {
-        self.in_flight.len() < MAX_IN_FLIGHT_REQUESTS
+    fn dispatch(&mut self, (id, request): MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()> {
+        assert!(self.poll_ready().is_ready());
+
+        if let Ok(request) = request {
+            let response = self.service.call(request);
+            self.in_flight.push((id, InFlight::Active(response)));
+        }
+
+        // TODO: Should the error be handled differently?
+
+        Ok(())
     }
 
-    fn has_in_flight(&self) -> bool {
-        !self.in_flight.is_empty()
+    fn poll_ready(&self) -> Async<()> {
+        if self.in_flight.len() < MAX_IN_FLIGHT_REQUESTS {
+            Async::Ready(())
+        } else {
+            Async::NotReady
+        }
+    }
+
+    fn cancel(&mut self, _request_id: RequestId) -> io::Result<()> {
+        // TODO: implement
+        Ok(())
     }
 }
 
-impl<T, S, E> Future for Server<S, T>
-    where T: Transport<Error = E>,
-          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>>,
+impl<S, T, B> Future for Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     type Item = ();
     type Error = io::Error;
@@ -121,7 +153,9 @@ impl<T, S, E> Future for Server<S, T>
  *
  */
 
-impl<F: Future> InFlight<F> {
+impl<F> InFlight<F>
+    where F: Future,
+{
     // Returns true if done
     fn poll(&mut self) -> bool {
         let res = match *self {

@@ -123,6 +123,11 @@ impl<T> FrameDeque<T> {
         }
     }
 
+    pub fn clear(&mut self) {
+        while let Some(_) = self.pop() {
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.len.get()
     }

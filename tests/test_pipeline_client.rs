@@ -18,17 +18,19 @@ use tokio_proto::{pipeline, Message};
 use tokio_core::reactor::Core;
 use std::io;
 use std::thread;
-use std::cell::RefCell;
 use std::sync::mpsc;
+
+// The message type is a static string for both the request and response
+type Msg = &'static str;
 
 // Transport handle
 type TransportHandle = mock::TransportHandle<Frame, Frame>;
 
 // Client handle
-type Client = tokio_proto::Client<&'static str, &'static str, Body, io::Error>;
+type Client = tokio_proto::Client<Msg, Msg, Body, Body, io::Error>;
 
 // In frame
-type Frame = pipeline::Frame<&'static str, u32, io::Error>;
+type Frame = pipeline::Frame<Msg, u32, io::Error>;
 
 // Body stream
 type Body = Receiver<u32, io::Error>;
@@ -41,8 +43,8 @@ fn test_ping_pong_close() {
         let pong = service.call(Message::WithoutBody("ping"));
         assert_eq!("ping", mock.next_write().unwrap_msg());
 
-        mock.send(pipeline::Frame::Message("pong"));
-        assert_eq!("pong", pong.wait().unwrap());
+        mock.send(msg("pong"));
+        assert_eq!("pong", pong.wait().unwrap().into_inner());
 
         mock.send(pipeline::Frame::Done);
         mock.allow_and_assert_drop();
@@ -53,13 +55,13 @@ fn test_ping_pong_close() {
 #[ignore]
 fn test_response_ready_before_request_sent() {
     run(|mock, service| {
-        mock.send(pipeline::Frame::Message("pong"));
+        mock.send(msg("pong"));
 
         support::sleep_ms(20);
 
         let pong = service.call(Message::WithoutBody("ping"));
 
-        assert_eq!("pong", pong.wait().unwrap());
+        assert_eq!("pong", pong.wait().unwrap().into_inner());
     });
 }
 
@@ -74,10 +76,8 @@ fn test_streaming_request_body() {
         assert_eq!("ping", mock.next_write().unwrap_msg());
 
         for i in 0..3 {
-            println!("send: {}", i);
             mock.allow_write();
             tx = tx.send(Ok(i)).wait().ok().unwrap();
-            println!("did the send");
             assert_eq!(Some(i), mock.next_write().unwrap_body());
         }
 
@@ -85,8 +85,8 @@ fn test_streaming_request_body() {
         drop(tx);
         assert_eq!(None, mock.next_write().unwrap_body());
 
-        mock.send(pipeline::Frame::Message("pong"));
-        assert_eq!("pong", pong.wait().unwrap());
+        mock.send(msg("pong"));
+        assert_eq!("pong", pong.wait().unwrap().into_inner());
 
         mock.send(pipeline::Frame::Done);
         mock.allow_and_assert_drop();
@@ -96,6 +96,13 @@ fn test_streaming_request_body() {
 #[test]
 #[ignore]
 fn test_streaming_response_body() {
+}
+
+fn msg(msg: Msg) -> Frame {
+    pipeline::Frame::Message {
+        message: msg,
+        body: false,
+    }
 }
 
 /// Setup a reactor running a pipeline::Client and a mock transport. Yields the
@@ -111,10 +118,7 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
         let (mock, new_transport) = mock::transport::<Frame, Frame>(handle.clone());
 
         let transport = new_transport.new_transport().unwrap();
-        let transport = RefCell::new(Some(transport));
-        let new_transport = move || Ok(transport.borrow_mut().take().unwrap());
-
-        let service = pipeline::connect(new_transport, &handle);
+        let service = pipeline::connect(Ok(transport), &handle);
 
         tx2.send((mock, service)).unwrap();
         lp.run(rx)

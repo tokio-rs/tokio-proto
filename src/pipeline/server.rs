@@ -1,8 +1,10 @@
-use {Error, Message};
-use super::{pipeline, ServerService, Transport};
+use {Message, Body};
+use super::{pipeline, Transport, Pipeline, PipelineMessage};
+use tokio_service::Service;
+use futures::{Future, Poll, Async};
+use futures::stream::Stream;
 use std::collections::VecDeque;
 use std::io;
-use futures::{Future, Poll, Async};
 
 // TODO:
 //
@@ -11,16 +13,20 @@ use futures::{Future, Poll, Async};
 
 /// A server `Task` that dispatches `Transport` messages to a `Service` using
 /// protocol pipelining.
-pub struct Server<S, T>
-    where S: ServerService,
-          T: Transport,
+pub struct Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error> + 'static,
 {
-    inner: pipeline::Pipeline<Dispatch<S>, T>,
+    inner: Pipeline<Dispatch<S, T>>,
 }
 
-struct Dispatch<S: ServerService> {
+struct Dispatch<S, T> where S: Service {
     // The service handling the connection
     service: S,
+    transport: T,
     in_flight: VecDeque<InFlight<S::Future>>,
 }
 
@@ -29,52 +35,75 @@ enum InFlight<F: Future> {
     Done(Result<F::Item, F::Error>),
 }
 
-impl<T, S, E> Server<S, T>
-    where T: Transport<Error = E>,
-          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>>,
+impl<S, T, B> Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     /// Create a new pipeline `Server` dispatcher with the given service and
     /// transport
-    pub fn new(service: S, transport: T) -> io::Result<Server<S, T>> {
+    pub fn new(service: S, transport: T) -> Server<S, T, B> {
         let dispatch = Dispatch {
             service: service,
+            transport: transport,
             in_flight: VecDeque::with_capacity(32),
         };
 
         // Create the pipeline dispatcher
-        let pipeline = pipeline::Pipeline::new(dispatch, transport);
+        let pipeline = Pipeline::new(dispatch);
 
         // Return the server task
-        Ok(Server { inner: pipeline })
+        Server { inner: pipeline }
     }
 }
 
-impl<S> pipeline::Dispatch for Dispatch<S>
-    where S: ServerService,
+impl<S, T, B> pipeline::Dispatch for Dispatch<S, T>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error> + 'static,
 {
-    type InMsg = S::Response;
-    type InBody = S::Body;
-    type InBodyStream = S::BodyStream;
-    type OutMsg = S::Request;
-    type Error = S::Error;
+    type In = T::In;
+    type BodyIn = T::BodyIn;
+    type Out = T::Out;
+    type BodyOut = T::BodyOut;
+    type Error = T::Error;
+    type Stream = B;
+    type Transport = T;
 
-    fn dispatch(&mut self, request: Self::OutMsg) -> io::Result<()> {
-        let response = self.service.call(request);
-        self.in_flight.push_back(InFlight::Active(response));
+    fn transport(&mut self) -> &mut T {
+        &mut self.transport
+    }
+
+    fn dispatch(&mut self,
+                request: PipelineMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>)
+                -> io::Result<()>
+    {
+        if let Ok(request) = request {
+            let response = self.service.call(request);
+            self.in_flight.push_back(InFlight::Active(response));
+        }
+
+        // TODO: Should the error be handled differently?
+
         Ok(())
     }
 
-    fn poll(&mut self) -> Option<Result<Message<Self::InMsg, Self::InBodyStream>, Self::Error>> {
+    fn poll(&mut self) -> Poll<Option<PipelineMessage<Self::In, Self::Stream, Self::Error>>, io::Error> {
         for slot in self.in_flight.iter_mut() {
             slot.poll();
         }
+
         match self.in_flight.front() {
             Some(&InFlight::Done(_)) => {}
-            _ => return None,
+            _ => return Ok(Async::NotReady)
         }
+
         match self.in_flight.pop_front() {
-            Some(InFlight::Done(res)) => Some(res),
+            Some(InFlight::Done(res)) => Ok(Async::Ready(Some(res))),
             _ => panic!(),
         }
     }
@@ -100,10 +129,12 @@ impl<F: Future> InFlight<F> {
     }
 }
 
-impl<T, S, E> Future for Server<S, T>
-    where T: Transport<Error = E>,
-          S: ServerService<Request = T::Out, Response = T::In, Body = T::BodyIn, Error = E>,
-          E: From<Error<E>>,
+impl<S, T, B> Future for Server<S, T, B>
+    where T: Transport,
+          S: Service<Request = Message<T::Out, Body<T::BodyOut, T::Error>>,
+                    Response = Message<T::In, B>,
+                       Error = T::Error> + 'static,
+          B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     type Item = ();
     type Error = io::Error;

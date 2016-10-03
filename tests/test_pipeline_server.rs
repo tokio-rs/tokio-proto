@@ -16,6 +16,7 @@ use support::mock;
 use tokio_proto::Message;
 use tokio_proto::pipeline::{self, Frame};
 use tokio_core::reactor::Core;
+use tokio_service::Service;
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
@@ -28,7 +29,7 @@ type Body = Receiver<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<Message<Msg, Body>, u32, io::Error>;
+type OutFrame = Frame<Msg, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
@@ -215,7 +216,7 @@ fn test_reading_error_frame_from_transport() {
     });
 
     run(service, |mock| {
-        mock.send(Frame::Error(io::Error::new(io::ErrorKind::Other, "mock transport error frame")));
+        mock.send(Frame::Error { error: io::Error::new(io::ErrorKind::Other, "mock transport error frame") });
         mock.assert_drop();
     });
 }
@@ -266,12 +267,12 @@ fn test_streaming_request_body_then_responding() {
         mock.send(msg_with_body("omg"));
 
         for i in 0..5 {
-            mock.send(Frame::Body(Some(i)));
+            mock.send(Frame::Body { chunk: Some(i) });
             assert_eq!(i, rx.recv().unwrap());
         }
 
         // Send end-of-stream notification
-        mock.send(Frame::Body(None));
+        mock.send(Frame::Body { chunk: None });
 
         assert_eq!(mock.next_write().unwrap_msg(), "hi2u");
 
@@ -309,12 +310,12 @@ fn test_responding_then_streaming_request_body() {
         assert_eq!(mock.next_write().unwrap_msg(), "hi2u");
 
         for i in 0..5 {
-            mock.send(Frame::Body(Some(i)));
+            mock.send(Frame::Body { chunk: Some(i) });
             assert_eq!(i, rx.recv().unwrap());
         }
 
         // Send end-of-stream notification
-        mock.send(Frame::Body(None));
+        mock.send(Frame::Body { chunk: None });
 
         mock.send(Frame::Done);
         mock.allow_and_assert_drop();
@@ -348,7 +349,7 @@ fn test_pipeline_streaming_body_without_consuming() {
         mock.send(msg_with_body("one"));
 
         for i in 0..5 {
-            mock.send(Frame::Body(Some(i)));
+            mock.send(Frame::Body { chunk: Some(i) });
             support::sleep_ms(20);
             assert!(rx.try_recv().is_err());
         }
@@ -356,17 +357,14 @@ fn test_pipeline_streaming_body_without_consuming() {
         assert_eq!(mock.next_write().unwrap_msg(), "resp-one");
 
         // Send the next request
-        println!("sending two");
         mock.send(msg_with_body("two"));
 
         for i in 0..5 {
-            println!("sendering: {}", i);
-            mock.send(Frame::Body(Some(i)));
-            println!("waiting");
+            mock.send(Frame::Body { chunk: Some(i) });
             assert_eq!(i, rx.recv().unwrap());
         }
 
-        mock.send(Frame::Body(None));
+        mock.send(Frame::Body { chunk: None });
 
         mock.allow_write();
         assert_eq!(mock.next_write().unwrap_msg(), "resp-two");
@@ -423,22 +421,19 @@ fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
 }
 
 fn msg(msg: Msg) -> OutFrame {
-    Frame::Message(Message::WithoutBody(msg))
+    Frame::Message { message: msg, body: false }
 }
 
 fn msg_with_body(msg: Msg) -> OutFrame {
-    let (tx, rx) = stream::channel();
-    Frame::MessageWithBody(Message::WithBody(msg, rx), tx)
+    Frame::Message { message: msg, body: true }
 }
 
 /// Setup a reactor running a pipeline::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
-    where S: pipeline::ServerService<Request = Message<Msg, Body>,
-                                    Response = Msg,
-                                        Body = u32,
-                                  BodyStream = Body,
-                                       Error = io::Error> + Send + 'static,
+    where S: Service<Request = Message<Msg, Body>,
+                    Response = Message<Msg, Body>,
+                       Error = io::Error> + Sync + Send + 'static,
           S::Future: Send + 'static,
           F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),
 {
@@ -452,7 +447,7 @@ fn run<S, F>(service: S, f: F)
         let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
 
         let transport = new_transport.new_transport().unwrap();
-        let dispatch = pipeline::Server::new(service, transport).unwrap();
+        let dispatch = pipeline::Server::new(service, transport);
         handle.spawn(dispatch.map_err(|e| error!("error: {}", e)));
         tx2.send(mock).unwrap();
         lp.run(rx)

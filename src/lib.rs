@@ -32,3 +32,6 @@ pub use error::Error;
 pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};
 pub use message::Message;
+
+/// Outbound body stream type
+pub type Body<T, E> = futures::stream::Receiver<T, E>;
