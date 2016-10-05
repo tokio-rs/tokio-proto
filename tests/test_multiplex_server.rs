@@ -10,13 +10,12 @@ extern crate env_logger;
 
 mod support;
 
+use support::multiplex as mux;
+
 use futures::{Future, finished, oneshot};
-use futures::stream::{self, Stream, Receiver};
-use support::mock;
+use futures::stream::{self, Stream};
 use tokio_proto::Message;
-use tokio_proto::multiplex::{self, RequestId, Frame};
-use tokio_service::Service;
-use tokio_core::reactor::Core;
+use tokio_proto::multiplex::{Frame};
 use rand::Rng;
 use std::io;
 use std::sync::{mpsc, Arc, Mutex};
@@ -24,24 +23,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
-// The message type is a static string for both the request and response
-type Msg = &'static str;
-
-// The body stream is a stream of u32 values
-type Body = Receiver<u32, io::Error>;
-
-// Frame written to the transport
-type InFrame = Frame<Msg, u32, io::Error>;
-type OutFrame = Frame<Msg, u32, io::Error>;
-
 #[test]
 fn test_immediate_done() {
     let service = tokio_service::simple_service(|req| {
         finished(req)
     });
 
-    run(service, |mock| {
-        mock.send(multiplex::Frame::Done);
+    mux::run(service, |mock| {
+        mock.send(mux::done());
         mock.allow_and_assert_drop();
     });
 }
@@ -53,9 +42,9 @@ fn test_immediate_writable_echo() {
         finished((req))
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         mock.allow_write();
-        mock.send(msg(0, "hello"));
+        mock.send(mux::message(0, "hello"));
 
         let wr = mock.next_write();
         assert_eq!(wr.request_id(), Some(0));
@@ -76,9 +65,9 @@ fn test_immediate_writable_delayed_response_echo() {
         fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         mock.allow_write();
-        mock.send(msg(0, "hello"));
+        mock.send(mux::message(0, "hello"));
 
         support::sleep_ms(20);
         c.complete(Ok(Message::WithoutBody("goodbye")));
@@ -99,8 +88,8 @@ fn test_delayed_writable_immediate_response_echo() {
         finished((req))
     });
 
-    run(service, |mock| {
-        mock.send(msg(0, "hello"));
+    mux::run(service, |mock| {
+        mock.send(mux::message(0, "hello"));
 
         support::sleep_ms(20);
 
@@ -114,7 +103,8 @@ fn test_delayed_writable_immediate_response_echo() {
 
 #[test]
 fn test_same_order_multiplexing() {
-    let (tx, rx) = channel();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
 
     let service = tokio_service::simple_service(move |_| {
         let (c, fut) = oneshot();
@@ -122,17 +112,17 @@ fn test_same_order_multiplexing() {
         fut.then(|r| r.unwrap())
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         // Allow all the writes
         for _ in 0..3 { mock.allow_write() };
 
-        mock.send(msg(0, "hello"));
+        mock.send(mux::message(0, "hello"));
         let c1 = rx.recv().unwrap();
 
-        mock.send(msg(1, "hello"));
+        mock.send(mux::message(1, "hello"));
         let c2 = rx.recv().unwrap();
 
-        mock.send(msg(2, "hello"));
+        mock.send(mux::message(2, "hello"));
         let c3 = rx.recv().unwrap();
 
         mock.assert_no_write(20);
@@ -161,7 +151,8 @@ fn test_same_order_multiplexing() {
 
 #[test]
 fn test_out_of_order_multiplexing() {
-    let (tx, rx) = channel();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
 
     let service = tokio_service::simple_service(move |_| {
         let (c, fut) = oneshot();
@@ -169,17 +160,17 @@ fn test_out_of_order_multiplexing() {
         fut.then(|r| r.unwrap())
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         // Allow all the writes
         for _ in 0..3 { mock.allow_write() };
 
-        mock.send(msg(0, "hello"));
+        mock.send(mux::message(0, "hello"));
         let c1 = rx.recv().unwrap();
 
-        mock.send(msg(1, "hello"));
+        mock.send(mux::message(1, "hello"));
         let c2 = rx.recv().unwrap();
 
-        mock.send(msg(2, "hello"));
+        mock.send(mux::message(2, "hello"));
         let c3 = rx.recv().unwrap();
 
         mock.assert_no_write(20);
@@ -206,17 +197,18 @@ fn test_out_of_order_multiplexing() {
 
 #[test]
 fn test_multiplexing_while_transport_not_writable() {
-    let (tx, rx) = channel();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
 
-    let service = tokio_service::simple_service(move |req: Message<&'static str, Body>| {
+    let service = tokio_service::simple_service(move |req: Message<mux::Head, mux::Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
         finished(req)
     });
 
-    run(service, |mock| {
-        mock.send(msg(0, "one"));
-        mock.send(msg(1, "two"));
-        mock.send(msg(2, "three"));
+    mux::run(service, |mock| {
+        mock.send(mux::message(0, "one"));
+        mock.send(mux::message(1, "two"));
+        mock.send(mux::message(2, "three"));
 
         // Assert the service received all the requests before they are written
         // to the transport
@@ -242,8 +234,8 @@ fn test_repeatedly_flushes_messages() {
         finished(req)
     });
 
-    run(service, |mock| {
-        mock.send(msg(0, "hello"));
+    mux::run(service, |mock| {
+        mock.send(mux::message(0, "hello"));
 
         mock.allow_and_assert_flush();
         mock.allow_and_assert_flush();
@@ -260,7 +252,7 @@ fn test_repeatedly_flushes_messages() {
 fn test_reaching_max_in_flight_requests() {
     use futures::Oneshot;
 
-    let (tx, rx) = mpsc::channel::<Oneshot<Result<Message<&'static str, Body>, io::Error>>>();
+    let (tx, rx) = mpsc::channel::<Oneshot<Result<Message<mux::Head, mux::Body>, io::Error>>>();
     let rx = Arc::new(Mutex::new(rx));
 
     let c1 = Arc::new(AtomicUsize::new(0));
@@ -276,12 +268,12 @@ fn test_reaching_max_in_flight_requests() {
 
     let mut responses = vec![];
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         for i in 0..33 {
             let (c, resp) = oneshot();
             tx.send(resp).unwrap();
             responses.push((i, c));
-            mock.send(msg(i, "request"));
+            mock.send(mux::message(i, "request"));
         }
 
         // wait a bit
@@ -328,9 +320,9 @@ fn test_basic_streaming_response_body() {
         finished(Message::WithBody("hi2u", body))
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         mock.allow_write();
-        mock.send(msg(3, "want-body"));
+        mock.send(mux::message(3, "want-body"));
 
         let wr = mock.next_write();
         assert_eq!(Some(3), wr.request_id());
@@ -370,9 +362,10 @@ fn test_basic_streaming_response_body() {
 
 #[test]
 fn test_basic_streaming_request_body_read_then_respond() {
-    let (tx, rx) = channel();
+    let (tx, rx) = mpsc::channel();
+    let tx = Arc::new(Mutex::new(tx));
 
-    let service = tokio_service::simple_service(move |mut req: Message<Msg, Body>| {
+    let service = tokio_service::simple_service(move |mut req: Message<mux::Head, mux::Body>| {
         assert_eq!(req, "have-body");
 
         let body = req.take_body().unwrap();
@@ -386,9 +379,9 @@ fn test_basic_streaming_request_body_read_then_respond() {
         })
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         mock.allow_write();
-        mock.send(msg_with_body(2, "have-body"));
+        mock.send(mux::message_with_body(2, "have-body"));
 
         for i in 0..5 {
             // No write yet
@@ -420,7 +413,7 @@ fn test_interleaving_request_body_chunks() {
     let tx = Mutex::new(tx);
     let cnt = AtomicUsize::new(0);
 
-    let service = tokio_service::simple_service(move |mut req: Message<Msg, Body>| {
+    let service = tokio_service::simple_service(move |mut req: Message<mux::Head, mux::Body>| {
         let body = req.take_body().unwrap();
         let tx = tx.lock().unwrap().clone();
         let i = cnt.fetch_add(1, Ordering::Relaxed);
@@ -435,9 +428,9 @@ fn test_interleaving_request_body_chunks() {
         })
     });
 
-    run(service, |mock| {
-        mock.send(msg_with_body(2, "have-body-0"));
-        mock.send(msg_with_body(4, "have-body-1"));
+    mux::run(service, |mock| {
+        mock.send(mux::message_with_body(2, "have-body-0"));
+        mock.send(mux::message_with_body(4, "have-body-1"));
 
         // The write must be allowed in order to process the bodies
         mock.allow_write();
@@ -509,7 +502,7 @@ fn test_read_error_as_first_frame() {
         finished(Message::WithoutBody("nope"))
     });
 
-    run(service, |mock| {
+    mux::run(service, |mock| {
         mock.allow_write();
         mock.send(Frame::Error { id: 1, error: io::Error::new(io::ErrorKind::Other, "boom") });
 
@@ -531,74 +524,10 @@ fn test_error_handling_before_message_dispatched() {
     */
 }
 
+/*
 fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
     let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
     (tx, rx)
 }
-
-fn msg(request_id: RequestId, msg: Msg) -> OutFrame {
-    Frame::Message {
-        id: request_id,
-        message: msg,
-        body: false,
-    }
-}
-
-fn msg_with_body(request_id: RequestId, message: Msg) -> OutFrame {
-    Frame::Message {
-        id: request_id,
-        message: message,
-        body: true,
-    }
-}
-
-/// Setup a reactor running a multiplex::Server with the given service and a
-/// mock transport. Yields the mock transport handle to the function.
-fn run<S, F>(service: S, f: F)
-    where S: Service<Request = Message<Msg, Body>,
-                    Response = Message<Msg, Body>,
-                       Error = io::Error> + Sync + Send + 'static,
-          S::Future: Send + 'static,
-          F: FnOnce(mock::TransportHandle<InFrame, OutFrame>)
-{
-    use tokio_service::simple_service;
-
-    let service = simple_service(move |request| {
-        Box::new(service.call(request)) as Box<Future<Item = Message<Msg, Body>, Error = io::Error> + Send + 'static>
-    });
-
-    _run(Box::new(service), f);
-}
-
-type ServerService = Box<Service<Request = Message<Msg, Body>,
-                                Response = Message<Msg, Body>,
-                                   Error = io::Error,
-                                  Future = Box<Future<Item = Message<Msg, Body>, Error = io::Error> + Send + 'static>> + Send + 'static>;
-
-fn _run<F>(service: ServerService, f: F)
-    where F: FnOnce(mock::TransportHandle<InFrame, OutFrame>)
-{
-    drop(::env_logger::init());
-    let (tx, rx) = oneshot();
-    let (tx2, rx2) = mpsc::channel();
-    let t = thread::spawn(move || {
-        let mut lp = Core::new().unwrap();
-        let handle = lp.handle();
-        let (mock, new_transport) = mock::transport::<InFrame, OutFrame>(handle.clone());
-
-        let transport = new_transport.new_transport().unwrap();
-        handle.spawn({
-            let dispatch = multiplex::Server::new(service, transport);
-            dispatch.map_err(|e| error!("error: {}", e))
-        });
-        tx2.send(mock).unwrap();
-        lp.run(rx)
-    });
-    let mock = rx2.recv().unwrap();
-
-    f(mock);
-
-    tx.complete(());
-    t.join().unwrap().unwrap();
-}
+*/

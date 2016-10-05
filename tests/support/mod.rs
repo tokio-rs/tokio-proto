@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 pub mod mock;
+pub mod multiplex;
 
 use std::time::Duration;
 
