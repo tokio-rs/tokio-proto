@@ -43,7 +43,7 @@ pub enum Frame<T, B, E> {
     Message {
         /// The message value
         message: T,
-        /// Set to true when body frames will follow with the same request ID.
+        /// Set to true when body frames will follow
         body: bool,
     },
     /// Body frame. None indicates that the body is done streaming.

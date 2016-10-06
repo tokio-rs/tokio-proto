@@ -38,7 +38,7 @@ pub fn connect<T, F, B>(new_transport: F, handle: &Handle)
         })
         .map_err(|e| {
             // TODO: where to punt this error to?
-            error!("multiplex error: {}", e);
+            error!("pipeline error: {}", e);
         });
 
     // Spawn the task
