@@ -37,6 +37,15 @@ pub struct Multiplex<T> where T: Dispatch {
     // True as long as the connection has more request frames to read.
     run: bool,
 
+    // Used to track if any operations make progress
+    made_progress: bool,
+
+    // True when blocked on dispatch
+    blocked_on_dispatch: bool,
+
+    // True when blocked on flush
+    blocked_on_flush: WriteState,
+
     // Glues the service with the pipeline task
     dispatch: T,
 
@@ -94,6 +103,13 @@ struct Exchange<T: Dispatch> {
 enum Request<T: Dispatch> {
     In, // TODO: Handle inbound message buffering?
     Out(Option<Message<T::Out, Body<T::BodyOut, T::Error>>>),
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum WriteState {
+    NoWrite,
+    Wrote,
+    Blocked,
 }
 
 /// Message used to communicate through the multiplex dispatch
@@ -157,6 +173,9 @@ impl<T> Multiplex<T> where T: Dispatch {
 
         Multiplex {
             run: true,
+            made_progress: false,
+            blocked_on_dispatch: false,
+            blocked_on_flush: WriteState::NoWrite,
             dispatch: dispatch,
             exchanges: HashMap::new(),
             is_flushed: true,
@@ -191,6 +210,9 @@ impl<T> Multiplex<T> where T: Dispatch {
 
             try!(self.dispatch.dispatch((id, Ok(message))));
         }
+
+        // At this point, the task is blocked on the dispatcher
+        self.blocked_on_dispatch = true;
 
         Ok(())
     }
@@ -284,7 +306,10 @@ impl<T> Multiplex<T> where T: Dispatch {
                 assert!(!e.get().responded, "invalid exchange state");
                 assert!(e.get().is_inbound());
 
-                // Dispatch the message
+                // Dispatch the message. The dispatcher is not checked for
+                // readiness in this case. This is because the message is a
+                // response to a request initiated by the dispatch. It is
+                // assumed that dispatcher can always process responses.
                 try!(self.dispatch.dispatch((id, Ok(message))));
 
                 // Track that the exchange has been responded to
@@ -319,6 +344,8 @@ impl<T> Multiplex<T> where T: Dispatch {
                     e.insert(exchange);
                 } else {
                     trace!("   --> dispatch not ready");
+
+                    self.blocked_on_dispatch = true;
 
                     // Create the exchange state, including the buffered message
                     let mut exchange = Exchange::new(
@@ -429,14 +456,19 @@ impl<T> Multiplex<T> where T: Dispatch {
 
             match try!(self.dispatch.poll()) {
                 Async::Ready(Some((id, Ok(message)))) => {
+                    self.dispatch_made_progress();
+
                     trace!("   --> got message");
                     try!(self.write_in_message(id, message));
                 }
                 Async::Ready(Some((id, Err(error)))) => {
+                    self.dispatch_made_progress();
+
                     trace!("   --> got error");
                     try!(self.write_in_error(id, error));
                 }
                 Async::Ready(None) => {
+                    trace!("   --> got error");
                     trace!("   --> got None");
                     // The service is done with the connection. In this case, a
                     // `Done` frame should be written to the transport and the
@@ -454,6 +486,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         }
 
         trace!("   --> transport not ready");
+        self.blocked_on_flush.transport_not_write_ready();
 
         Ok(())
     }
@@ -477,6 +510,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
         // Write the frame
         try!(self.dispatch.transport().write(frame));
+        self.blocked_on_flush.wrote_frame();
 
         match self.exchanges.entry(id) {
             Entry::Occupied(mut e) => {
@@ -527,6 +561,7 @@ impl<T> Multiplex<T> where T: Dispatch {
             // Write the error frame
             let frame = Frame::Error { id: id, error: error };
             try!(self.dispatch.transport().write(frame));
+            self.blocked_on_flush.wrote_frame();
 
             e.remove();
         }
@@ -544,19 +579,26 @@ impl<T> Multiplex<T> where T: Dispatch {
         for (&id, exchange) in &mut self.exchanges {
             trace!("   --> checking request {:?}", id);
 
-            while self.dispatch.transport().poll_write().is_ready() {
+            loop {
+                if !self.dispatch.transport().poll_write().is_ready() {
+                    self.blocked_on_flush.transport_not_write_ready();
+                    break 'outer;
+                }
+
                 match exchange.try_poll_in_body() {
                     Ok(Async::Ready(Some(chunk))) => {
                         trace!("   --> got chunk");
 
                         let frame = Frame::Body { id: id, chunk: Some(chunk) };
                         try!(self.dispatch.transport().write(frame));
+                        self.blocked_on_flush.wrote_frame();
                     }
                     Ok(Async::Ready(None)) => {
                         trace!("   --> end of stream");
 
                         let frame = Frame::Body { id: id, chunk: None };
                         try!(self.dispatch.transport().write(frame));
+                        self.blocked_on_flush.wrote_frame();
 
                         // in_body is fully written.
                         exchange.in_body = None;
@@ -566,6 +608,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                         // Write the error frame
                         let frame = Frame::Error { id: id, error: error };
                         try!(self.dispatch.transport().write(frame));
+                        self.blocked_on_flush.wrote_frame();
 
                         exchange.responded = true;
                         exchange.in_body = None;
@@ -597,7 +640,24 @@ impl<T> Multiplex<T> where T: Dispatch {
 
     fn flush(&mut self) -> io::Result<()> {
         self.is_flushed = try!(self.dispatch.transport().flush()).is_ready();
+
+        if self.is_flushed && self.blocked_on_flush == WriteState::Blocked {
+            self.made_progress = true;
+        }
+
         Ok(())
+    }
+
+    fn reset_flags(&mut self) {
+        self.made_progress = false;
+        self.blocked_on_dispatch = false;
+        self.blocked_on_flush = WriteState::NoWrite;
+    }
+
+    fn dispatch_made_progress(&mut self) {
+        if self.blocked_on_dispatch {
+            self.made_progress = true;
+        }
     }
 }
 
@@ -614,25 +674,31 @@ impl<T> Future for Multiplex<T>
         // Always flush the transport first
         try!(self.flush());
 
-        // Try to dispatch any buffered messages
-        try!(self.flush_dispatch_deque());
-
         // Try to send any buffered body chunks on their senders
         try!(self.flush_out_bodies());
 
-        // First read off data from the socket
-        try!(self.read_out_frames());
+        // Initially set the made_progress flag to true
+        self.made_progress = true;
 
-        // Handle completed responses
-        try!(self.write_in_frames());
+        // Keep looping as long as at least one operation succeeds
+        while self.made_progress {
+            trace!("~~ multiplex primary loop tick ~~");
 
-        // Since writing frames could un-block the dispatch, attempt to flush
-        // the dispatch queue again.
-        // TODO: This is a hack and really shouldn't be relied on
-        try!(self.flush_dispatch_deque());
+            // Reset various flags tracking the state throughout this loop.
+            self.reset_flags();
 
-        // Try flushing buffered writes
-        try!(self.flush());
+            // Try to dispatch any buffered messages
+            try!(self.flush_dispatch_deque());
+
+            // First read off data from the socket
+            try!(self.read_out_frames());
+
+            // Handle completed responses
+            try!(self.write_in_frames());
+
+            // Try flushing buffered writes
+            try!(self.flush());
+        }
 
         // Clean shutdown of the pipeline server can happen when
         //
@@ -826,5 +892,19 @@ impl<T: Dispatch> Exchange<T> {
         self.out_deque.clear();
         self.out_body.take();
         Ok(())
+    }
+}
+
+impl WriteState {
+    fn transport_not_write_ready(&mut self) {
+        if *self == WriteState::Wrote {
+            *self = WriteState::Blocked;
+        }
+    }
+
+    fn wrote_frame(&mut self) {
+        if *self == WriteState::NoWrite {
+            *self = WriteState::Wrote;
+        }
     }
 }

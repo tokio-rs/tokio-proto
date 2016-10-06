@@ -16,6 +16,7 @@ use self::tokio_service::{Service, simple_service};
 use support::mock;
 
 use futures::{Future, oneshot};
+use futures::stream::Stream;
 use std::{io, thread};
 use std::sync::{mpsc};
 
@@ -27,6 +28,9 @@ pub type Chunk = u32;
 
 /// Streaming body
 pub type Body = ::tokio_proto::Body<Chunk, io::Error>;
+
+/// Streaming response type
+pub type BodyBox = Box<Stream<Item = Chunk, Error = io::Error> + Send + 'static>;
 
 /// Protocol frame
 pub type Frame = ::tokio_proto::multiplex::Frame<Head, Chunk, io::Error>;
@@ -74,20 +78,47 @@ pub fn done() -> Frame {
     proto::Frame::Done
 }
 
+pub trait NewTransport: Send + 'static {
+    type Transport: proto::Transport<In = Head,
+                                    Out = Head,
+                                 BodyIn = Chunk,
+                                BodyOut = Chunk,
+                                  Error = io::Error> + Send;
+
+    fn new_transport(self, transport: mock::Transport<Frame, Frame>) -> Self::Transport;
+}
+
 /// Setup a reactor running a multiplex::Server with the given service and a
 /// mock transport. Yields the mock transport handle to the function.
 pub fn run<S, F>(service: S, f: F)
     where S: Service<Request = Message<Head, Body>,
-                    Response = Message<Head, Body>,
+                    Response = Message<Head, BodyBox>,
                        Error = io::Error> + Sync + Send + 'static,
           S::Future: Send + 'static,
           F: FnOnce(mock::TransportHandle<Frame, Frame>)
 {
     let service = simple_service(move |request| {
-        Box::new(service.call(request)) as Box<Future<Item = Message<Head, Body>, Error = io::Error> + Send + 'static>
+        Box::new(service.call(request)) as Box<Future<Item = Message<Head, BodyBox>, Error = io::Error> + Send + 'static>
     });
 
-    _run(Box::new(service), f);
+    _run(Box::new(service), |t| t, f);
+}
+
+/// Setup a reactor running a multiplex::Server with the given service and a
+/// mock transport. Yields the mock transport handle to the function.
+pub fn run_with_transport<S, F, T>(service: S, new_transport: T, f: F)
+    where S: Service<Request = Message<Head, Body>,
+                    Response = Message<Head, BodyBox>,
+                       Error = io::Error> + Sync + Send + 'static,
+          S::Future: Send + 'static,
+          T: NewTransport,
+          F: FnOnce(mock::TransportHandle<Frame, Frame>)
+{
+    let service = simple_service(move |request| {
+        Box::new(service.call(request)) as Box<Future<Item = Message<Head, BodyBox>, Error = io::Error> + Send + 'static>
+    });
+
+    _run(Box::new(service), new_transport, f);
 }
 
 /// Setup a reactor running a multiplex::Client and a mock transport. Yields the
@@ -118,12 +149,22 @@ pub fn client<F>(f: F) where F: FnOnce(TransportHandle, Client) {
 }
 
 type ServerService = Box<Service<Request = Message<Head, Body>,
-                                Response = Message<Head, Body>,
+                                Response = Message<Head, BodyBox>,
                                    Error = io::Error,
-                                  Future = Box<Future<Item = Message<Head, Body>, Error = io::Error> + Send + 'static>> + Send + 'static>;
+                                  Future = Box<Future<Item = Message<Head, BodyBox>, Error = io::Error> + Send + 'static>> + Send + 'static>;
 
-fn _run<F>(service: ServerService, f: F)
-    where F: FnOnce(mock::TransportHandle<Frame, Frame>)
+type BoxTransport = Box<proto::Transport<In = Head,
+                                         Out = Head,
+                                         BodyIn = Chunk,
+                                         BodyOut = Chunk,
+                                         Error = io::Error> + Send>;
+
+// Convert to trait objects in a hope to make compiling tests faster
+fn _run<F, T>(service: ServerService,
+              new_transport: T,
+              f: F)
+    where F: FnOnce(TransportHandle),
+          T: NewTransport,
 {
     let _ = ::env_logger::init();
 
@@ -132,13 +173,17 @@ fn _run<F>(service: ServerService, f: F)
     let t = thread::spawn(move || {
         let mut lp = Core::new().unwrap();
         let handle = lp.handle();
-        let (mock, new_transport) = mock::transport::<Frame, Frame>(handle.clone());
 
-        let transport = new_transport.new_transport().unwrap();
+        let (mock, new_mock) = mock::transport::<Frame, Frame>(handle.clone());
+        let transport = new_mock.new_transport().unwrap();
+        let transport = new_transport.new_transport(transport);
+        let transport: BoxTransport = Box::new(transport);
+
         handle.spawn({
             let dispatch = proto::Server::new(service, transport);
             dispatch.map_err(|e| error!("error: {}", e))
         });
+
         tx2.send(mock).unwrap();
         lp.run(rx)
     });
@@ -148,4 +193,19 @@ fn _run<F>(service: ServerService, f: F)
 
     tx.complete(());
     t.join().unwrap().unwrap();
+}
+
+impl<F, T> NewTransport for F
+    where F: FnOnce(mock::Transport<Frame, Frame>) -> T + Send + 'static,
+          T: proto::Transport<In = Head,
+                             Out = Head,
+                          BodyIn = Chunk,
+                         BodyOut = Chunk,
+                           Error = io::Error> + Send,
+{
+    type Transport = T;
+
+    fn new_transport(self, mock: mock::Transport<Frame, Frame>) -> T {
+        self(mock)
+    }
 }

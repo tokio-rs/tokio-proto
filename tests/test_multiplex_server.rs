@@ -25,8 +25,8 @@ use std::time::Duration;
 
 #[test]
 fn test_immediate_done() {
-    let service = tokio_service::simple_service(|req| {
-        finished(req)
+    let service = tokio_service::simple_service(|_| {
+        finished(Message::WithoutBody("goodbye"))
     });
 
     mux::run(service, |mock| {
@@ -39,7 +39,7 @@ fn test_immediate_done() {
 fn test_immediate_writable_echo() {
     let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
-        finished((req))
+        finished(Message::WithoutBody("goodbye"))
     });
 
     mux::run(service, |mock| {
@@ -48,7 +48,7 @@ fn test_immediate_writable_echo() {
 
         let wr = mock.next_write();
         assert_eq!(wr.request_id(), Some(0));
-        assert_eq!(wr.unwrap_msg(), "hello");
+        assert_eq!(wr.unwrap_msg(), "goodbye");
 
         mock.send(Frame::Done);
         mock.allow_and_assert_drop();
@@ -85,7 +85,7 @@ fn test_immediate_writable_delayed_response_echo() {
 fn test_delayed_writable_immediate_response_echo() {
     let service = tokio_service::simple_service(|req| {
         assert_eq!(req, "hello");
-        finished((req))
+        finished(Message::WithoutBody("goodbye"))
     });
 
     mux::run(service, |mock| {
@@ -97,7 +97,7 @@ fn test_delayed_writable_immediate_response_echo() {
 
         let wr = mock.next_write();
         assert_eq!(wr.request_id(), Some(0));
-        assert_eq!(wr.unwrap_msg(), "hello");
+        assert_eq!(wr.unwrap_msg(), "goodbye");
     });
 }
 
@@ -202,7 +202,7 @@ fn test_multiplexing_while_transport_not_writable() {
 
     let service = tokio_service::simple_service(move |req: Message<mux::Head, mux::Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
-        finished(req)
+        finished(Message::WithoutBody(*req.get_ref()))
     });
 
     mux::run(service, |mock| {
@@ -230,8 +230,8 @@ fn test_multiplexing_while_transport_not_writable() {
 
 #[test]
 fn test_repeatedly_flushes_messages() {
-    let service = tokio_service::simple_service(move |req| {
-        finished(req)
+    let service = tokio_service::simple_service(move |_| {
+        finished(Message::WithoutBody("goodbye"))
     });
 
     mux::run(service, |mock| {
@@ -241,7 +241,7 @@ fn test_repeatedly_flushes_messages() {
         mock.allow_and_assert_flush();
 
         mock.allow_write();
-        assert_eq!("hello", mock.next_write().unwrap_msg());
+        assert_eq!("goodbye", mock.next_write().unwrap_msg());
 
         mock.send(Frame::Done);
         mock.assert_drop();
@@ -252,7 +252,7 @@ fn test_repeatedly_flushes_messages() {
 fn test_reaching_max_in_flight_requests() {
     use futures::Oneshot;
 
-    let (tx, rx) = mpsc::channel::<Oneshot<Result<Message<mux::Head, mux::Body>, io::Error>>>();
+    let (tx, rx) = mpsc::channel::<Oneshot<Result<Message<mux::Head, mux::BodyBox>, io::Error>>>();
     let rx = Arc::new(Mutex::new(rx));
 
     let c1 = Arc::new(AtomicUsize::new(0));
@@ -263,7 +263,6 @@ fn test_reaching_max_in_flight_requests() {
         let fut = rx.lock().unwrap().recv().unwrap();
         fut.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
            .and_then(|res| res)
-        // fut.then(|res| res.or_else(|_| Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))))
     });
 
     let mut responses = vec![];
@@ -317,7 +316,7 @@ fn test_basic_streaming_response_body() {
         assert_eq!(req, "want-body");
 
         let body = rx.lock().unwrap().take().unwrap();
-        finished(Message::WithBody("hi2u", body))
+        finished(Message::WithBody("hi2u", Box::new(body) as mux::BodyBox))
     });
 
     mux::run(service, |mock| {
@@ -523,11 +522,3 @@ fn test_error_handling_before_message_dispatched() {
     });
     */
 }
-
-/*
-fn channel<T>() -> (Arc<Mutex<mpsc::Sender<T>>>, mpsc::Receiver<T>) {
-    let (tx, rx) = mpsc::channel();
-    let tx = Arc::new(Mutex::new(tx));
-    (tx, rx)
-}
-*/
