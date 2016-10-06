@@ -548,12 +548,13 @@ impl<T> Multiplex<T> where T: Dispatch {
                       -> io::Result<()>
     {
         if let Entry::Occupied(mut e) = self.exchanges.entry(id) {
-            assert!(e.get().is_outbound(), "invalid state");
             assert!(!e.get().responded, "exchange already responded");
 
             // TODO: should the outbound body be canceled? In theory, if the
             // consuming end doesn't want it anymore, it should drop interest
+            e.get_mut().responded = true;
             e.get_mut().out_body = None;
+            e.get_mut().in_body = None;
             e.get_mut().out_deque.clear();
 
             assert!(e.get().is_complete());
@@ -564,6 +565,8 @@ impl<T> Multiplex<T> where T: Dispatch {
             self.blocked_on_flush.wrote_frame();
 
             e.remove();
+        } else {
+            trace!("exchange does not exist; id={:?}", id);
         }
 
         Ok(())
