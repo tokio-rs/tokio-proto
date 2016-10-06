@@ -35,9 +35,10 @@ pub use self::client::connect;
 use {Error};
 use tokio_core::io::FramedIo;
 use futures::{Async, Poll};
-use std::{fmt, io};
+use std::{io};
 
 /// A pipelined protocol frame
+#[derive(Debug, Clone)]
 pub enum Frame<T, B, E> {
     /// Either a request or a response
     Message {
@@ -140,34 +141,6 @@ impl<T, B, E> Frame<T, B, E> {
         match *self {
             Frame::Done => true,
             _ => false,
-        }
-    }
-}
-
-impl<T, B, E> fmt::Debug for Frame<T, B, E>
-    where T: fmt::Debug,
-          E: fmt::Debug,
-          B: fmt::Debug,
-{
-    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            Frame::Message { ref message, body } => {
-                fmt.debug_struct("Frame::Message")
-                    .field("message", message)
-                    .field("body", &body)
-                    .finish()
-            }
-            Frame::Body { ref chunk } => {
-                fmt.debug_struct("Frame::Body")
-                    .field("chunk", chunk)
-                    .finish()
-            }
-            Frame::Error { ref error } => {
-                fmt.debug_struct("Frame::Error")
-                    .field("error", error)
-                    .finish()
-            },
-            Frame::Done => write!(fmt, "Frame::Done"),
         }
     }
 }
