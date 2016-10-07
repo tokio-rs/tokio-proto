@@ -95,7 +95,8 @@ impl<T, E> Future for Response<T, E> {
             Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
             Ok(Async::Ready(Err(e))) => Err(e),
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(_) => panic!("aborted"),
+            // TODO: This can happen if the connection failed to establish
+            Err(e) => panic!("aborted: {:?}", e),
         }
     }
 }
