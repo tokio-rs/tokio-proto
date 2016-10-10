@@ -530,9 +530,12 @@ impl<T> Multiplex<T> where T: Dispatch {
             }
             Entry::Vacant(e) => {
                 // Create the exchange state
-                let exchange = Exchange::new(
+                let mut exchange = Exchange::new(
                     Request::In,
                     self.frame_buf.deque());
+
+                // Set the body receiver
+                exchange.in_body = body;
 
                 // Track the exchange
                 e.insert(exchange);
@@ -584,6 +587,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
             loop {
                 if !self.dispatch.transport().poll_write().is_ready() {
+                    trace!("   --> blocked on transport");
                     self.blocked_on_flush.transport_not_write_ready();
                     break 'outer;
                 }
@@ -608,6 +612,8 @@ impl<T> Multiplex<T> where T: Dispatch {
                         break;
                     }
                     Err(error) => {
+                        trace!("   --> got error");
+
                         // Write the error frame
                         let frame = Frame::Error { id: id, error: error };
                         try!(self.dispatch.transport().write(frame));
@@ -885,6 +891,8 @@ impl<T: Dispatch> Exchange<T> {
                         // buffer is dropped. If future body frames are
                         // received, the sender will be gone and the frames
                         // will be dropped.
+                        //
+                        // TODO: Notify transport
                         break;
                     }
                 }
