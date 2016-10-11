@@ -1,6 +1,6 @@
 use {Error, Message, Body};
 use super::{Frame, Transport};
-use futures::stream::{self, Stream, Sender, FutureSender};
+use futures::stream::{Stream, Sender, FutureSender};
 use futures::{Future, Poll, Async};
 use std::io;
 
@@ -147,7 +147,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                 if body {
                     trace!("read out message with body");
 
-                    let (tx, rx) = stream::channel();
+                    let (tx, rx) = Body::pair();
                     let message = Message::WithBody(message, rx);
 
                     // Track the out body sender. If `self.out_body`

@@ -3,7 +3,7 @@ use super::{Frame, RequestId, Transport};
 use super::frame_buf::{FrameBuf, FrameDeque};
 use sender::Sender;
 use futures::{Future, Poll, Async};
-use futures::stream::{self, Stream};
+use futures::stream::{Stream};
 use std::io;
 use std::collections::{HashMap, VecDeque};
 use std::collections::hash_map::Entry;
@@ -264,7 +264,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         match frame {
             Frame::Message { id, message, body } => {
                 if body {
-                    let (tx, rx) = stream::channel();
+                    let (tx, rx) = Body::pair();
                     let tx = Sender::new(tx);
                     let message = Message::WithBody(message, rx);
 
@@ -839,7 +839,10 @@ impl<T: Dispatch> Exchange<T> {
     fn try_poll_in_body(&mut self) -> Poll<Option<T::BodyIn>, T::Error> {
         match self.in_body {
             Some(ref mut b) => b.poll(),
-            _ => Ok(Async::NotReady),
+            None => {
+                trace!(" !!! no in body??");
+                Ok(Async::NotReady)
+            }
         }
     }
 
