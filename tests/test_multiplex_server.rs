@@ -304,6 +304,19 @@ fn test_reaching_max_in_flight_requests() {
 
         // Next request is processed
         assert_eq!(33, c1.load(Ordering::SeqCst));
+
+        // Complete pending requests
+        for (i, c) in responses.drain(..) {
+            mock.allow_write();
+            c.complete((Ok(Message::WithoutBody("zomg"))));
+
+            let wr = mock.next_write();
+            assert_eq!(Some(i), wr.request_id());
+            assert_eq!("zomg", wr.unwrap_msg());
+        }
+
+        mock.send(Frame::Done);
+        mock.assert_drop();
     });
 }
 

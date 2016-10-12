@@ -31,3 +31,9 @@ impl<T, E> Stream for Body<T, E> {
         }
     }
 }
+
+impl<T, E> From<Receiver<T, E>> for Body<T, E> {
+    fn from(src: Receiver<T, E>) -> Body<T, E> {
+        Body { inner: Some(src) }
+    }
+}

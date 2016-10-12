@@ -10,7 +10,7 @@ extern crate env_logger;
 
 mod support;
 
-use futures::stream::{self, Stream, Receiver};
+use futures::stream::{self, Stream};
 use futures::{Future, failed, finished, oneshot};
 use support::mock;
 use tokio_proto::Message;
@@ -25,7 +25,7 @@ use std::thread;
 type Msg = &'static str;
 
 // The body stream is a stream of u32 values
-type Body = Receiver<u32, io::Error>;
+type Body = tokio_proto::Body<u32, io::Error>;
 
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
@@ -386,7 +386,7 @@ fn test_streaming_response_body() {
 
     let service = tokio_service::simple_service(move |req| {
         assert_eq!(req, "omg");
-        finished(Message::WithBody("hi2u", rx.lock().unwrap().take().unwrap()))
+        finished(Message::WithBody("hi2u", rx.lock().unwrap().take().unwrap().into()))
     });
 
     run(service, |mock| {

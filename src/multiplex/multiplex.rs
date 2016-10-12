@@ -734,6 +734,14 @@ impl<T> Future for Multiplex<T>
     }
 }
 
+impl<T: Dispatch> Drop for Multiplex<T> {
+    fn drop(&mut self) {
+        if !self.exchanges.is_empty() {
+            warn!("multiplexer dropping with in-flight exchanges");
+        }
+    }
+}
+
 impl<T: Dispatch> Exchange<T> {
     fn new(request: Request<T>, deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>) -> Exchange<T> {
         Exchange {

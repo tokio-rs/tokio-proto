@@ -33,7 +33,7 @@ type Client = tokio_proto::Client<Msg, Msg, Body, Body, io::Error>;
 type Frame = pipeline::Frame<Msg, u32, io::Error>;
 
 // Body stream
-type Body = Receiver<u32, io::Error>;
+type Body = tokio_proto::Body<u32, io::Error>;
 
 #[test]
 fn test_ping_pong_close() {
@@ -71,7 +71,7 @@ fn test_streaming_request_body() {
         let (mut tx, rx) = stream::channel();
 
         mock.allow_write();
-        let pong = service.call(Message::WithBody("ping", rx));
+        let pong = service.call(Message::WithBody("ping", rx.into()));
 
         assert_eq!("ping", mock.next_write().unwrap_msg());
 

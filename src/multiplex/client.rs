@@ -127,6 +127,10 @@ impl<T, B> Drop for Dispatch<T, B>
           B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     fn drop(&mut self) {
+        if !self.in_flight.is_empty() {
+            warn!("multiplex client dropping with in-flight exchanges");
+        }
+
         // Complete any pending requests with an error
         for (_, complete) in self.in_flight.drain() {
             let err = Error::Io(broken_pipe());
