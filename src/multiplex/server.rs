@@ -97,7 +97,11 @@ impl<S, T, B> multiplex::Dispatch for Dispatch<S, T>
         if let Some(idx) = idx {
             // let (request_id, message) = self.in_flight.remove(idx);
             let (request_id, message) = self.in_flight.remove(idx);
-            let message = (request_id, message.unwrap_done());
+            let message = MultiplexMessage {
+                id: request_id,
+                message: message.unwrap_done(),
+                solo: false,
+            };
 
             Ok(Async::Ready(Some(message)))
         } else {
@@ -105,10 +109,14 @@ impl<S, T, B> multiplex::Dispatch for Dispatch<S, T>
         }
     }
 
-    fn dispatch(&mut self, (id, request): MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()> {
+    fn dispatch(&mut self, message: MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()> {
         assert!(self.poll_ready().is_ready());
 
-        if let Ok(request) = request {
+        let MultiplexMessage { id, message, solo } = message;
+
+        assert!(!solo);
+
+        if let Ok(request) = message {
             let response = self.service.call(request);
             self.in_flight.push((id, InFlight::Active(response)));
         }

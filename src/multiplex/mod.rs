@@ -58,6 +58,9 @@ pub enum Frame<T, B, E> {
         message: T,
         /// Set to true when body frames will follow with the same request ID.
         body: bool,
+        /// Set to `true` when this message does not have a pair in the other
+        /// direction
+        solo: bool,
     },
     /// Body frame.
     Body {

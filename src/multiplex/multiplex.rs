@@ -113,7 +113,14 @@ enum WriteState {
 }
 
 /// Message used to communicate through the multiplex dispatch
-pub type MultiplexMessage<T, B, E> = (RequestId, Result<Message<T, B>, E>);
+pub struct MultiplexMessage<T, B, E> {
+    /// Request ID
+    pub id: RequestId,
+    /// Message
+    pub message: Result<Message<T, B>, E>,
+    /// True if message has no pair (request / response)
+    pub solo: bool,
+}
 
 /// Dispatch messages from the transport to the service
 pub trait Dispatch: 'static {
@@ -198,17 +205,21 @@ impl<T> Multiplex<T> where T: Dispatch {
                 None => return Ok(()),
             };
 
-            // Take the buffered inbound request
-            let message = self.exchanges.get_mut(&id)
-                .and_then(|exchange| exchange.take_buffered_out_request());
-
-            // If `None`, continue the loop
-            let message = match message {
-                Some(message) => message,
-                _ => continue,
+            // Get the exchange
+            let exchange = match self.exchanges.get_mut(&id) {
+                Some(exchange) => exchange,
+                None => continue,
             };
 
-            try!(self.dispatch.dispatch((id, Ok(message))));
+            if let Some(message) = exchange.take_buffered_out_request() {
+                let message = MultiplexMessage {
+                    id: id,
+                    message: Ok(message),
+                    solo: exchange.responded,
+                };
+
+                try!(self.dispatch.dispatch(message));
+            }
         }
 
         // At this point, the task is blocked on the dispatcher
@@ -262,17 +273,17 @@ impl<T> Multiplex<T> where T: Dispatch {
         trace!("Multiplex::process_out_frame");
 
         match frame {
-            Frame::Message { id, message, body } => {
+            Frame::Message { id, message, body, solo } => {
                 if body {
                     let (tx, rx) = Body::pair();
                     let tx = Sender::new(tx);
                     let message = Message::WithBody(message, rx);
 
-                    try!(self.process_out_message(id, message, Some(tx)));
+                    try!(self.process_out_message(id, message, Some(tx), solo));
                 } else {
                     let message = Message::WithoutBody(message);
 
-                    try!(self.process_out_message(id, message, None));
+                    try!(self.process_out_message(id, message, None, solo));
                 }
             }
             Frame::Body { id, chunk } => {
@@ -296,7 +307,8 @@ impl<T> Multiplex<T> where T: Dispatch {
     fn process_out_message(&mut self,
                            id: RequestId,
                            message: Message<T::Out, Body<T::BodyOut, T::Error>>,
-                           body: Option<Sender<T::BodyOut, T::Error>>)
+                           body: Option<Sender<T::BodyOut, T::Error>>,
+                           solo: bool)
                            -> io::Result<()>
     {
         trace!("   --> process message; body={:?}", body.is_some());
@@ -310,7 +322,11 @@ impl<T> Multiplex<T> where T: Dispatch {
                 // readiness in this case. This is because the message is a
                 // response to a request initiated by the dispatch. It is
                 // assumed that dispatcher can always process responses.
-                try!(self.dispatch.dispatch((id, Ok(message))));
+                try!(self.dispatch.dispatch(MultiplexMessage {
+                    id: id,
+                    message: Ok(message),
+                    solo: solo,
+                }));
 
                 // Track that the exchange has been responded to
                 e.get_mut().responded = true;
@@ -330,9 +346,6 @@ impl<T> Multiplex<T> where T: Dispatch {
                     // Only should be here if there are no queued messages
                     assert!(self.dispatch_deque.is_empty());
 
-                    // Dispatch the message
-                    try!(self.dispatch.dispatch((id, Ok(message))));
-
                     // Create the exchange state
                     let mut exchange = Exchange::new(
                         Request::Out(None),
@@ -340,8 +353,20 @@ impl<T> Multiplex<T> where T: Dispatch {
 
                     exchange.out_body = body;
 
-                    // Track the exchange
-                    e.insert(exchange);
+                    // Set expect response
+                    exchange.set_expect_response(solo);
+
+                    if !exchange.is_complete() {
+                        // Track the exchange
+                        e.insert(exchange);
+                    }
+
+                    // Dispatch the message
+                    try!(self.dispatch.dispatch(MultiplexMessage {
+                        id: id,
+                        message: Ok(message),
+                        solo: solo,
+                    }));
                 } else {
                     trace!("   --> dispatch not ready");
 
@@ -353,6 +378,11 @@ impl<T> Multiplex<T> where T: Dispatch {
                         self.frame_buf.deque());
 
                     exchange.out_body = body;
+
+                    // Set expect response
+                    exchange.set_expect_response(solo);
+
+                    assert!(!exchange.is_complete());
 
                     // Track the exchange state
                     e.insert(exchange);
@@ -396,8 +426,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 if !exchange.responded {
                     // A response has not been provided yet, send the error via
                     // the dispatch
-                    let message = (id, Err(err));
-                    try!(self.dispatch.dispatch(message));
+                    try!(self.dispatch.dispatch(MultiplexMessage::error(id, err)));
 
                     exchange.responded = true;
                 } else {
@@ -455,17 +484,19 @@ impl<T> Multiplex<T> where T: Dispatch {
             trace!("   --> polling for in frame");
 
             match try!(self.dispatch.poll()) {
-                Async::Ready(Some((id, Ok(message)))) => {
+                Async::Ready(Some(message)) => {
                     self.dispatch_made_progress();
 
-                    trace!("   --> got message");
-                    try!(self.write_in_message(id, message));
-                }
-                Async::Ready(Some((id, Err(error)))) => {
-                    self.dispatch_made_progress();
-
-                    trace!("   --> got error");
-                    try!(self.write_in_error(id, error));
+                    match message.message {
+                        Ok(m) => {
+                            trace!("   --> got message");
+                            try!(self.write_in_message(message.id, m, message.solo));
+                        }
+                        Err(error) => {
+                            trace!("   --> got error");
+                            try!(self.write_in_error(message.id, error));
+                        }
+                    }
                 }
                 Async::Ready(None) => {
                     trace!("   --> got error");
@@ -493,7 +524,8 @@ impl<T> Multiplex<T> where T: Dispatch {
 
     fn write_in_message(&mut self,
                         id: RequestId,
-                        message: Message<T::In, T::Stream>)
+                        message: Message<T::In, T::Stream>,
+                        solo: bool)
                         -> io::Result<()>
     {
         let (message, body) = match message {
@@ -505,7 +537,8 @@ impl<T> Multiplex<T> where T: Dispatch {
         let frame = Frame::Message {
             id: id,
             message: message,
-            body: body.is_some()
+            body: body.is_some(),
+            solo: solo,
         };
 
         // Write the frame
@@ -516,6 +549,7 @@ impl<T> Multiplex<T> where T: Dispatch {
             Entry::Occupied(mut e) => {
                 assert!(!e.get().responded, "invalid exchange state");
                 assert!(e.get().is_outbound());
+                assert!(!solo);
 
                 // Track that the exchange has been responded to
                 e.get_mut().responded = true;
@@ -536,9 +570,12 @@ impl<T> Multiplex<T> where T: Dispatch {
 
                 // Set the body receiver
                 exchange.in_body = body;
+                exchange.set_expect_response(solo);
 
-                // Track the exchange
-                e.insert(exchange);
+                if !exchange.is_complete() {
+                    // Track the exchange
+                    e.insert(exchange);
+                }
             }
         }
 
@@ -776,7 +813,22 @@ impl<T: Dispatch> Exchange<T> {
     fn is_complete(&self) -> bool {
         // The exchange is completed if the response has been seen and bodies
         // in both directions are fully flushed
-        self.responded && self.out_body.is_none() && self.in_body.is_none()
+        self.responded &&
+            self.out_body.is_none() &&
+            self.in_body.is_none() &&
+            self.request.is_none()
+    }
+
+    fn set_expect_response(&mut self, solo: bool) {
+        self.responded = solo;
+
+        if solo {
+            if self.is_inbound() {
+                assert!(self.out_body.is_none());
+            } else {
+                assert!(self.in_body.is_none());
+            }
+        }
     }
 
     /// Takes the buffered out request out of the value and returns it
@@ -917,6 +969,16 @@ impl<T: Dispatch> Exchange<T> {
     }
 }
 
+impl<T: Dispatch> Request<T> {
+    fn is_none(&self) -> bool {
+        match *self {
+            Request::In => true,
+            Request::Out(None) => true,
+            _ => false,
+        }
+    }
+}
+
 impl WriteState {
     fn transport_not_write_ready(&mut self) {
         if *self == WriteState::Wrote {
@@ -927,6 +989,32 @@ impl WriteState {
     fn wrote_frame(&mut self) {
         if *self == WriteState::NoWrite {
             *self = WriteState::Wrote;
+        }
+    }
+}
+
+/*
+ *
+ * ===== impl MultiplexMessage =====
+ *
+ */
+
+impl<T, B, E> MultiplexMessage<T, B, E> {
+    /// Create a new MultiplexMessage
+    pub fn new(id: RequestId, message: Message<T, B>) -> MultiplexMessage<T, B, E> {
+        MultiplexMessage {
+            id: id,
+            message: Ok(message),
+            solo: false,
+        }
+    }
+
+    /// Create a new errored MultiplexMessage
+    pub fn error(id: RequestId, error: E) -> MultiplexMessage<T, B, E> {
+        MultiplexMessage {
+            id: id,
+            message: Err(error),
+            solo: false,
         }
     }
 }

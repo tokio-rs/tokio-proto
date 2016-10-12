@@ -65,9 +65,13 @@ impl<T, B> multiplex::Dispatch for Dispatch<T, B>
         &mut self.transport
     }
 
-    fn dispatch(&mut self, (id, response): MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()> {
+    fn dispatch(&mut self, message: MultiplexMessage<Self::Out, Body<Self::BodyOut, Self::Error>, Self::Error>) -> io::Result<()> {
+        let MultiplexMessage { id, message, solo } = message;
+
+        assert!(!solo);
+
         if let Some(complete) = self.in_flight.remove(&id) {
-            complete.complete(response);
+            complete.complete(message);
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "request / response mismatch"));
         }
@@ -90,7 +94,7 @@ impl<T, B> multiplex::Dispatch for Dispatch<T, B>
                 // Track complete handle
                 self.in_flight.insert(request_id, complete);
 
-                Ok(Async::Ready(Some((request_id, Ok(request)))))
+                Ok(Async::Ready(Some(MultiplexMessage::new(request_id, request))))
 
             }
             Ok(Async::Ready(None)) => {

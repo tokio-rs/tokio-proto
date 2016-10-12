@@ -10,7 +10,7 @@ extern crate env_logger;
 
 mod support;
 
-use futures::stream::{self, Receiver};
+use futures::stream::{self};
 use futures::{Future, oneshot};
 use support::mock;
 use tokio_service::Service;

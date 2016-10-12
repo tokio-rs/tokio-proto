@@ -47,6 +47,7 @@ pub fn message(id: RequestId, msg: Head) -> Frame {
         id: id,
         message: msg,
         body: false,
+        solo: false,
     }
 }
 
@@ -56,6 +57,7 @@ pub fn message_with_body(id: RequestId, message: Head) -> Frame {
         id: id,
         message: message,
         body: true,
+        solo: false,
     }
 }
 
