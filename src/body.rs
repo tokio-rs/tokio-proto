@@ -1,5 +1,6 @@
 use futures::{Async, Poll};
 use futures::stream::{self, Stream, Receiver, Sender};
+use std::fmt;
 
 /// Body stream
 pub struct Body<T, E> {
@@ -35,5 +36,11 @@ impl<T, E> Stream for Body<T, E> {
 impl<T, E> From<Receiver<T, E>> for Body<T, E> {
     fn from(src: Receiver<T, E>) -> Body<T, E> {
         Body { inner: Some(src) }
+    }
+}
+
+impl<T, E> fmt::Debug for Body<T, E> {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        write!(fmt, "Body {{ [stream of values] }}")
     }
 }
