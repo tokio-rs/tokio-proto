@@ -1,7 +1,7 @@
 use {Error, Body, Message};
 use super::{multiplex, Transport, RequestId, Multiplex, MultiplexMessage};
 use client::{self, Client, Receiver};
-use futures::{Future, IntoFuture, Complete, Poll, Async};
+use futures::{Future, Complete, Poll, Async};
 use futures::stream::Stream;
 use tokio_core::reactor::Handle;
 use std::io;
@@ -18,28 +18,23 @@ struct Dispatch<T, B>
 }
 
 /// Connect to the given `addr` and handle using the given Transport and protocol pipelining.
-pub fn connect<T, F, B>(new_transport: F, handle: &Handle)
+pub fn connect<T, B>(transport: T, handle: &Handle)
     -> Client<T::In, T::Out, B, Body<T::BodyOut, T::Error>, T::Error>
-    where F: IntoFuture<Item = T, Error = io::Error> + 'static,
-          T: Transport,
+    where T: Transport,
           B: Stream<Item = T::BodyIn, Error = T::Error> + 'static,
 {
     let (client, rx) = client::pair();
 
-    let task = new_transport.into_future()
-        .and_then(move |transport| {
-            let dispatch: Dispatch<T, B> = Dispatch {
-                transport: transport,
-                requests: rx,
-                in_flight: HashMap::new(),
-                next_request_id: 0,
-            };
+    let dispatch: Dispatch<T, B> = Dispatch {
+        transport: transport,
+        requests: rx,
+        in_flight: HashMap::new(),
+        next_request_id: 0,
+    };
 
-            Multiplex::new(dispatch)
-        })
-        .map_err(|e| {
-            // TODO: where to punt this error to?
-            error!("multiplex error: {}", e);
+    let task = Multiplex::new(dispatch)
+        .map_err(|err| {
+            info!("multiplex task failed with error; err={:?}", err);
         });
 
     // Spawn the task

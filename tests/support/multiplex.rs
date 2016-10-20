@@ -136,7 +136,7 @@ pub fn client<F>(f: F) where F: FnOnce(TransportHandle, Client) {
         let (mock, new_transport) = mock::transport::<Frame, Frame>(handle.clone());
 
         let transport = new_transport.new_transport().unwrap();
-        let service = proto::connect(Ok(transport), &handle);
+        let service = proto::connect(transport, &handle);
 
         tx2.send((mock, service)).unwrap();
         lp.run(rx)
@@ -181,10 +181,7 @@ fn _run<F, T>(service: ServerService,
         let transport = new_transport.new_transport(transport);
         let transport: BoxTransport = Box::new(transport);
 
-        handle.spawn({
-            let dispatch = proto::Server::new(service, transport);
-            dispatch.map_err(|e| error!("error: {}", e))
-        });
+        handle.spawn(proto::Server::new(service, transport));
 
         tx2.send(mock).unwrap();
         lp.run(rx)
