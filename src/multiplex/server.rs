@@ -148,10 +148,14 @@ impl<S, T, B> Future for Server<S, T, B>
           B: Stream<Item = T::BodyIn, Error = T::Error>,
 {
     type Item = ();
-    type Error = io::Error;
+    type Error = ();
 
-    fn poll(&mut self) -> Poll<(), io::Error> {
+    fn poll(&mut self) -> Poll<(), ()> {
         self.inner.poll()
+            .map_err(|e| {
+                debug!("multiplex server connection hit error; {:?}", e);
+                ()
+            })
     }
 }
 
