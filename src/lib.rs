@@ -20,6 +20,7 @@ pub mod client;
 pub mod multiplex;
 pub mod pipeline;
 pub mod server;
+pub mod easy;
 
 mod body;
 mod error;
