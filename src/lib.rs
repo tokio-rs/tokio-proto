@@ -24,7 +24,6 @@ pub mod easy;
 
 mod body;
 mod error;
-mod framing;
 mod io;
 mod message;
 mod sender;
@@ -32,6 +31,5 @@ mod sender;
 pub use body::Body;
 pub use client::Client;
 pub use error::Error;
-pub use framing::{Framed, Parse, Serialize};
 pub use io::{TryRead, TryWrite};
 pub use message::Message;
