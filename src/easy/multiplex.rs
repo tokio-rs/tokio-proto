@@ -33,24 +33,25 @@ use {Message, Body};
 /// implementation allows sending requests to the transport provided and returns
 /// futures to the responses. All requests are automatically multiplexed and
 /// managed internally.
-pub fn connect<F, T>(frames: F, handle: &Handle)
-    -> EasyClient<F::In, T>
-    where F: FramedIo<Out = Option<(RequestId, T)>> + 'static,
-          F::In: 'static,
+pub fn connect<F, T, U>(frames: F, handle: &Handle)
+    -> EasyClient<U, T>
+    where F: FramedIo<In = (RequestId, U),
+                      Out = Option<(RequestId, T)>> + 'static,
           T: 'static,
+          U: 'static,
 {
     EasyClient {
         inner: multiplex::connect(MyTransport::new(frames), handle),
     }
 }
 
-struct MyTransport<F, T> {
+struct MyTransport<F, T, U> {
     inner: F,
-    _marker: marker::PhantomData<fn() -> T>,
+    _marker: marker::PhantomData<fn() -> (T, U)>,
 }
 
-impl<F, T> MyTransport<F, T> {
-    fn new(f: F) -> MyTransport<F, T> {
+impl<F, T, U> MyTransport<F, T, U> {
+    fn new(f: F) -> MyTransport<F, T, U> {
         MyTransport {
             inner: f,
             _marker: marker::PhantomData,
@@ -58,12 +59,13 @@ impl<F, T> MyTransport<F, T> {
     }
 }
 
-impl<F, T> multiplex::Transport for MyTransport<F, T>
-    where F: FramedIo<Out = Option<(RequestId, T)>> + 'static,
-          F::In: 'static,
+impl<F, T, U> multiplex::Transport for MyTransport<F, T, U>
+    where F: FramedIo<In = (RequestId, U),
+                      Out = Option<(RequestId, T)>> + 'static,
           T: 'static,
+          U: 'static,
 {
-    type In = F::In;
+    type In = U;
     type BodyIn = ();
     type Out = T;
     type BodyOut = ();
@@ -90,9 +92,18 @@ impl<F, T> multiplex::Transport for MyTransport<F, T>
         self.inner.poll_write()
     }
 
-    fn write(&mut self, req: multiplex::Frame<F::In, (), io::Error>) -> Poll<(), io::Error> {
+    fn write(&mut self, req: multiplex::Frame<U, (), io::Error>) -> Poll<(), io::Error> {
         match req {
-            multiplex::Frame::Message { message, .. } => self.inner.write(message),
+            multiplex::Frame::Message {
+                message,
+                id,
+                body,
+                solo,
+            } => {
+                assert!(!body, "no bodies allowed");
+                assert!(!solo, "solo not supported in easy mode");
+                self.inner.write((id, message))
+            }
             _ => panic!("not a message frame"),
         }
     }
@@ -112,22 +123,24 @@ impl<F, T> multiplex::Transport for MyTransport<F, T>
 /// server to help simplify generics and get off the ground running. If
 /// streaming bodies are desired then the top level `multiplex::Server` type can
 /// be used (which this is built on).
-pub struct EasyServer<S, T, I>
-    where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
-          T::In: 'static,
-          I: 'static,
+pub struct EasyServer<S, T, Out, In>
+    where S: Service<Request = Out, Response = In, Error = io::Error> + 'static,
+          T: FramedIo<In = (RequestId, In),
+                      Out = Option<(RequestId, Out)>> + 'static,
+          In: 'static,
+          Out: 'static,
 {
     inner: multiplex::Server<MyService<S>,
-                             MyTransport<T, I>,
+                             MyTransport<T, Out, In>,
                              Receiver<(), io::Error>>,
 }
 
-impl<S, T, I> EasyServer<S, T, I>
-    where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
-          T::In: 'static,
-          I: 'static,
+impl<S, T, Out, In> EasyServer<S, T, Out, In>
+    where S: Service<Request = Out, Response = In, Error = io::Error> + 'static,
+          T: FramedIo<In = (RequestId, In),
+                      Out = Option<(RequestId, Out)>> + 'static,
+          In: 'static,
+          Out: 'static,
 {
     /// Instantiates a new multiplexed server.
     ///
@@ -135,7 +148,7 @@ impl<S, T, I> EasyServer<S, T, I>
     /// internally drive forward all requests for this given transport. The
     /// `transport` provided is an instance of `FramedIo` where the requests are
     /// dispatched to the `service` provided to get a response to write.
-    pub fn new(service: S, transport: T) -> EasyServer<S, T, I> {
+    pub fn new(service: S, transport: T) -> EasyServer<S, T, Out, In> {
         EasyServer {
             inner: multiplex::Server::new(MyService(service),
                                           MyTransport::new(transport)),
@@ -143,11 +156,12 @@ impl<S, T, I> EasyServer<S, T, I>
     }
 }
 
-impl<S, T, I> Future for EasyServer<S, T, I>
-    where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
-          T::In: 'static,
-          I: 'static,
+impl<S, T, Out, In> Future for EasyServer<S, T, Out, In>
+    where S: Service<Request = Out, Response = In, Error = io::Error> + 'static,
+          T: FramedIo<In = (RequestId, In),
+                      Out = Option<(RequestId, Out)>> + 'static,
+          In: 'static,
+          Out: 'static,
 {
     type Item = ();
     type Error = ();
