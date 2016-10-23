@@ -3,8 +3,7 @@
 //! This module is the same as the top-level `multiplex` module in this crate
 //! except that it has no support for streaming bodies. This in turn simplifies
 //! a number of generics and allows for protocols to easily get off the ground
-//! running. Additionally, requests are only allowed to be specified by one
-//! frame so request ids are automatically allocated.
+//! running.
 //!
 //! The API surface area of this module is the same as the top-level one, so no
 //! new functionality is introduced here. In fact all APIs here are built on top
@@ -21,7 +20,7 @@ use tokio_core::reactor::Handle;
 use tokio_service::Service;
 
 use easy::EasyClient;
-use multiplex;
+use multiplex::{self, RequestId};
 use {Message, Body};
 
 /// The "easy" form of connecting a multiplexed client.
@@ -36,7 +35,7 @@ use {Message, Body};
 /// managed internally.
 pub fn connect<F, T>(frames: F, handle: &Handle)
     -> EasyClient<F::In, T>
-    where F: FramedIo<Out = Option<T>> + 'static,
+    where F: FramedIo<Out = Option<(RequestId, T)>> + 'static,
           F::In: 'static,
           T: 'static,
 {
@@ -47,7 +46,6 @@ pub fn connect<F, T>(frames: F, handle: &Handle)
 
 struct MyTransport<F, T> {
     inner: F,
-    next_id: u64,
     _marker: marker::PhantomData<fn() -> T>,
 }
 
@@ -55,14 +53,13 @@ impl<F, T> MyTransport<F, T> {
     fn new(f: F) -> MyTransport<F, T> {
         MyTransport {
             inner: f,
-            next_id: 0,
             _marker: marker::PhantomData,
         }
     }
 }
 
 impl<F, T> multiplex::Transport for MyTransport<F, T>
-    where F: FramedIo<Out = Option<T>> + 'static,
+    where F: FramedIo<Out = Option<(RequestId, T)>> + 'static,
           F::In: 'static,
           T: 'static,
 {
@@ -77,12 +74,10 @@ impl<F, T> multiplex::Transport for MyTransport<F, T>
     }
 
     fn read(&mut self) -> Poll<multiplex::Frame<T, (), io::Error>, io::Error> {
-        let msg = match try_ready!(self.inner.read()) {
+        let (id, msg) = match try_ready!(self.inner.read()) {
             Some(msg) => msg,
             None => return Ok(multiplex::Frame::Done.into()),
         };
-        let id = self.next_id;
-        self.next_id += 1;
         Ok(multiplex::Frame::Message {
             message: msg,
             body: false,
@@ -119,7 +114,7 @@ impl<F, T> multiplex::Transport for MyTransport<F, T>
 /// be used (which this is built on).
 pub struct EasyServer<S, T, I>
     where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<I>> + 'static,
+          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
           T::In: 'static,
           I: 'static,
 {
@@ -130,7 +125,7 @@ pub struct EasyServer<S, T, I>
 
 impl<S, T, I> EasyServer<S, T, I>
     where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<I>> + 'static,
+          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
           T::In: 'static,
           I: 'static,
 {
@@ -150,7 +145,7 @@ impl<S, T, I> EasyServer<S, T, I>
 
 impl<S, T, I> Future for EasyServer<S, T, I>
     where S: Service<Request = I, Response = T::In, Error = io::Error> + 'static,
-          T: FramedIo<Out = Option<I>> + 'static,
+          T: FramedIo<Out = Option<(RequestId, I)>> + 'static,
           T::In: 'static,
           I: 'static,
 {
