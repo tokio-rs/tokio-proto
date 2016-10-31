@@ -179,6 +179,10 @@ impl<In, Out> FramedIo for Transport<In, Out>
     }
 
     fn poll_write(&mut self) -> Async<()> {
+        if self.pending.is_some() {
+            return Async::NotReady;
+        }
+
         self.source.poll_write()
     }
 

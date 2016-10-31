@@ -27,14 +27,16 @@ type Msg = &'static str;
 // The body stream is a stream of u32 values
 type Body = tokio_proto::Body<u32, io::Error>;
 
+type BodyBox = Box<Stream<Item = u32, Error = io::Error> + Send + 'static>;
+
 // Frame written to the transport
 type InFrame = Frame<Msg, u32, io::Error>;
 type OutFrame = Frame<Msg, u32, io::Error>;
 
 #[test]
 fn test_immediate_done() {
-    let service = tokio_service::simple_service(|req| {
-        finished(req)
+    let service = tokio_service::simple_service(|_| {
+        finished(Message::WithoutBody("goodbye"))
     });
 
     run(service, |mock| {
@@ -45,9 +47,9 @@ fn test_immediate_done() {
 
 #[test]
 fn test_immediate_writable_echo() {
-    let service = tokio_service::simple_service(|req| {
+    let service = tokio_service::simple_service(|req: Message<&'static str, Body>| {
         assert_eq!(req, "hello");
-        finished((req))
+        finished(Message::WithoutBody(*req.get_ref()))
     });
 
     run(service, |mock| {
@@ -86,9 +88,9 @@ fn test_immediate_writable_delayed_response_echo() {
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
-    let service = tokio_service::simple_service(|req| {
+    let service = tokio_service::simple_service(|req: Message<&'static str, Body>| {
         assert_eq!(req, "hello");
-        finished((req))
+        finished(Message::WithoutBody(*req.get_ref()))
     });
 
     run(service, |mock| {
@@ -145,7 +147,7 @@ fn test_pipelining_while_transport_not_writable() {
 
     let service = tokio_service::simple_service(move |req: Message<&'static str, Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
-        finished(req)
+        finished(Message::WithoutBody(*req.get_ref()))
     });
 
     run(service, |mock| {
@@ -172,8 +174,8 @@ fn test_pipelining_while_transport_not_writable() {
 
 #[test]
 fn test_repeatedly_flushes_messages() {
-    let service = tokio_service::simple_service(move |req| {
-        finished(req)
+    let service = tokio_service::simple_service(move |req: Message<&'static str, Body>| {
+        finished(Message::WithoutBody(*req.get_ref()))
     });
 
     run(service, |mock| {
@@ -323,6 +325,31 @@ fn test_responding_then_streaming_request_body() {
 }
 
 #[test]
+fn test_pipeline_stream_response_body() {
+    let service = tokio_service::simple_service(move |_| {
+        let body = Box::new(stream::once(Ok(1u32))) as BodyBox;
+        finished(Message::WithBody("resp", body))
+    });
+
+    run(service, |mock| {
+        // Allow a bunch of writes
+        mock.allow_write();
+        mock.allow_write();
+        mock.allow_write();
+        mock.allow_write();
+
+        mock.send(msg("one"));
+        mock.send(pipeline::Frame::Done);
+
+        assert_eq!(mock.next_write().unwrap_msg(), "resp");
+        assert_eq!(mock.next_write().unwrap_body(), Some(1));
+        assert_eq!(mock.next_write().unwrap_body(), None);
+
+        mock.allow_and_assert_drop();
+    });
+}
+
+#[test]
 fn test_pipeline_streaming_body_without_consuming() {
     let (tx, rx) = channel();
 
@@ -386,7 +413,8 @@ fn test_streaming_response_body() {
 
     let service = tokio_service::simple_service(move |req| {
         assert_eq!(req, "omg");
-        finished(Message::WithBody("hi2u", rx.lock().unwrap().take().unwrap().into()))
+        let body = rx.lock().unwrap().take().unwrap();
+        finished(Message::WithBody("hi2u", Box::new(body) as BodyBox))
     });
 
     run(service, |mock| {
@@ -432,7 +460,7 @@ fn msg_with_body(msg: Msg) -> OutFrame {
 /// mock transport. Yields the mock transport handle to the function.
 fn run<S, F>(service: S, f: F)
     where S: Service<Request = Message<Msg, Body>,
-                    Response = Message<Msg, Body>,
+                    Response = Message<Msg, BodyBox>,
                        Error = io::Error> + Sync + Send + 'static,
           S::Future: Send + 'static,
           F: FnOnce(mock::TransportHandle<InFrame, OutFrame>),

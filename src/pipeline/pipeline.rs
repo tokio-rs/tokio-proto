@@ -312,20 +312,20 @@ impl<T> Pipeline<T> where T: Dispatch {
     // Returns true if the response body is fully written
     fn write_in_body(&mut self) -> io::Result<bool> {
         trace!("write_in_body");
+
         if let Some(ref mut body) = self.in_body {
-            while self.dispatch.transport().poll_write().is_ready() {
+            loop {
+                if !self.dispatch.transport().poll_write().is_ready() {
+                    return Ok(false);
+                }
+
                 match body.poll() {
                     Ok(Async::Ready(Some(chunk))) => {
-                        let r = try!(self.dispatch.transport().write(Frame::Body { chunk: Some(chunk) }));
-
-                        // TODO: This doesn't seem correct anymore
-                        if !r.is_ready() {
-                            return Ok(false);
-                        }
+                        try!(self.dispatch.transport().write(Frame::Body { chunk: Some(chunk) }));
                     }
                     Ok(Async::Ready(None)) => {
                         try!(self.dispatch.transport().write(Frame::Body { chunk: None }));
-                        // Response body flushed, let fall through
+                        break;
                     }
                     Err(_) => {
                         unimplemented!();
