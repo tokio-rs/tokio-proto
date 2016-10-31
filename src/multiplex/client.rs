@@ -34,7 +34,7 @@ pub fn connect<T, B>(transport: T, handle: &Handle)
 
     let task = Multiplex::new(dispatch)
         .map_err(|err| {
-            info!("multiplex task failed with error; err={:?}", err);
+            debug!("multiplex task failed with error; err={:?}", err);
         });
 
     // Spawn the task

@@ -86,7 +86,9 @@ impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
     }
 }
 
-impl<T, E> Future for Response<T, E> {
+impl<T, E> Future for Response<T, E>
+    where E: From<Error<E>>,
+{
     type Item = T;
     type Error = E;
 
@@ -95,8 +97,10 @@ impl<T, E> Future for Response<T, E> {
             Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
             Ok(Async::Ready(Err(e))) => Err(e),
             Ok(Async::NotReady) => Ok(Async::NotReady),
-            // TODO: This can happen if the connection failed to establish
-            Err(e) => panic!("aborted: {:?}", e),
+            Err(_) => {
+                let e = Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
+                Err(e.into())
+            }
         }
     }
 }
