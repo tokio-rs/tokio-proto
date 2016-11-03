@@ -1,5 +1,4 @@
-use bytes::{Buf, MutBuf};
-use bytes::buf::{ReadExt, WriteExt};
+use bytes::{Buf, BufMut};
 use futures::{Poll, Async};
 use std::io;
 
@@ -22,7 +21,11 @@ pub trait TryRead: io::Read {
 
     /// Pull some bytes from this source into the specified `Buf`, returning
     /// how many bytes were read.
-    fn try_read_buf<B: MutBuf>(&mut self, buf: &mut B) -> Poll<usize, io::Error>;
+    fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> io::Result<usize>;
+
+    /// Pull some bytes from this source into the specified `Buf`, returning
+    /// how many bytes were read.
+    fn try_read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error>;
 }
 
 impl<T: io::Read> TryRead for T {
@@ -34,7 +37,20 @@ impl<T: io::Read> TryRead for T {
         }
     }
 
-    fn try_read_buf<B: MutBuf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
+    fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> io::Result<usize> {
+        if !buf.has_remaining_mut() {
+            return Ok(0);
+        }
+
+        unsafe {
+            let i = try!(self.read(buf.bytes_mut()));
+
+            buf.advance_mut(i);
+            Ok(i)
+        }
+    }
+
+    fn try_read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
         match self.read_buf(buf) {
             Ok(n) => Ok(Async::Ready(n)),
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(Async::NotReady),
@@ -59,6 +75,9 @@ pub trait TryWrite: io::Write {
     /// For more details, read the `std::io::Write` documentation.
     fn try_write(&mut self, buf: &[u8]) -> Poll<usize, io::Error>;
 
+    /// Write a `Buf` into this value, returning how many bytes were written.
+    fn write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<usize>;
+
     /// Write a `Buf` into this object, returning how many bytes were written.
     fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error>;
 
@@ -73,6 +92,16 @@ impl<T: io::Write> TryWrite for T {
             Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => Ok(Async::NotReady),
             Err(e) => Err(e),
         }
+    }
+
+    fn write_buf<B: Buf>(&mut self, buf: &mut B) -> io::Result<usize> {
+        if !buf.has_remaining() {
+            return Ok(0);
+        }
+
+        let i = try!(self.write(buf.bytes()));
+        buf.advance(i);
+        Ok(i)
     }
 
     fn try_write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
