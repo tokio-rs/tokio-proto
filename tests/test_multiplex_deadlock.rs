@@ -11,6 +11,7 @@ extern crate env_logger;
 mod support;
 
 use support::multiplex as mux;
+use support::FnService;
 
 use tokio_proto::Message;
 use tokio_proto::multiplex::{self, Frame};
@@ -83,7 +84,7 @@ fn test_write_requires_flush() {
     }
 
     // Define a simple service that just finishes immediately
-    let service = tokio_service::simple_service(|_| {
+    let service = FnService::new(|_| {
         let body = vec![0, 1, 2].into_iter().map(Ok);
         let body: mux::BodyBox = Box::new(stream::iter(body));
 

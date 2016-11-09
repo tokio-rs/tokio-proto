@@ -11,7 +11,7 @@ extern crate tokio_service;
 use tokio_proto::Message;
 use tokio_proto::multiplex::{self as proto, RequestId};
 use tokio_core::reactor::{Core};
-use self::tokio_service::{Service, simple_service};
+use self::tokio_service::Service;
 
 use support::mock;
 
@@ -99,11 +99,7 @@ pub fn run<S, F>(service: S, f: F)
           S::Future: Send + 'static,
           F: FnOnce(mock::TransportHandle<Frame, Frame>)
 {
-    let service = simple_service(move |request| {
-        Box::new(service.call(request)) as Box<Future<Item = Message<Head, BodyBox>, Error = io::Error> + Send + 'static>
-    });
-
-    _run(Box::new(service), |t| t, f);
+    _run(service, |t| t, f);
 }
 
 /// Setup a reactor running a multiplex::Server with the given service and a
@@ -116,11 +112,7 @@ pub fn run_with_transport<S, F, T>(service: S, new_transport: T, f: F)
           T: NewTransport,
           F: FnOnce(mock::TransportHandle<Frame, Frame>)
 {
-    let service = simple_service(move |request| {
-        Box::new(service.call(request)) as Box<Future<Item = Message<Head, BodyBox>, Error = io::Error> + Send + 'static>
-    });
-
-    _run(Box::new(service), new_transport, f);
+    _run(service, new_transport, f);
 }
 
 /// Setup a reactor running a multiplex::Client and a mock transport. Yields the
@@ -162,11 +154,15 @@ type BoxTransport = Box<proto::Transport<In = Head,
                                          Error = io::Error> + Send>;
 
 // Convert to trait objects in a hope to make compiling tests faster
-fn _run<F, T>(service: ServerService,
-              new_transport: T,
-              f: F)
+fn _run<F, T, S>(service: S,
+                 new_transport: T,
+                 f: F)
     where F: FnOnce(TransportHandle),
           T: NewTransport,
+          S: Service<Request = Message<Head, Body>,
+                     Response = Message<Head, BodyBox>,
+                     Error = io::Error> + Send + 'static,
+          S::Future: Send + 'static,
 {
     let _ = ::env_logger::init();
 
