@@ -80,10 +80,6 @@ impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
 
         Response { inner: rx }
     }
-
-    fn poll_ready(&self) -> Async<()> {
-        self.tx.borrow_mut().poll_ready().unwrap()
-    }
 }
 
 impl<T, E> Future for Response<T, E>

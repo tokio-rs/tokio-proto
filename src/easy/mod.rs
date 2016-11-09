@@ -69,10 +69,6 @@ impl<R1, R2> Service for EasyClient<R1, R2>
             inner: self.inner.call(Message::WithoutBody(request)),
         }
     }
-
-    fn poll_ready(&self) -> Async<()> {
-        self.inner.poll_ready()
-    }
 }
 
 /// Future returned from `Client::call`.

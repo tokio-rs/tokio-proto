@@ -159,10 +159,6 @@ impl<S: Service> Service for MyService<S> {
             Message::WithBody(..) => panic!("bodies not supported"),
         }
     }
-
-    fn poll_ready(&self) -> Async<()> {
-        self.0.poll_ready()
-    }
 }
 
 struct MyFuture<F, T>(F, marker::PhantomData<fn() -> T>);
