@@ -12,10 +12,10 @@
 #![allow(warnings)]
 
 use {Error, Message};
-use sender::Sender;
 use tokio_service::Service;
-use futures::stream::{self, Stream};
-use futures::{self, Future, Oneshot, Complete, Async, Poll};
+use futures::{Future, Async, Poll, Stream, AsyncSink, Sink};
+use futures::sync::spsc;
+use futures::sync::oneshot;
 use std::io;
 use std::cell::RefCell;
 
@@ -24,18 +24,18 @@ pub struct Client<R1, R2, B1, B2, E>
     where B1: Stream<Error = E>,
           E: From<Error<E>>,
 {
-    tx: RefCell<Sender<Envelope<R1, R2, B1, B2, E>, io::Error>>,
+    tx: RefCell<spsc::Sender<Envelope<R1, R2, B1, B2, E>, io::Error>>,
 }
 
 /// Response future returned from a client
 pub struct Response<T, E> {
-    inner: Oneshot<Result<T, E>>,
+    inner: oneshot::Receiver<Result<T, E>>,
 }
 
 /// Message used to dispatch requests to the task managing the client
 /// connection.
 type Envelope<R1, R2, B1, B2, E> =
-    (Message<R1, B1>, Complete<Result<Message<R2, B2>, E>>);
+    (Message<R1, B1>, oneshot::Sender<Result<Message<R2, B2>, E>>);
 
 /// A client / receiver pair
 pub type Pair<R1, R2, B1, B2, E> =
@@ -43,7 +43,7 @@ pub type Pair<R1, R2, B1, B2, E> =
 
 /// Receive requests submitted to the client
 pub type Receiver<R1, R2, B1, B2, E> =
-    stream::Receiver<Envelope<R1, R2, B1, B2, E>, io::Error>;
+    spsc::Receiver<Envelope<R1, R2, B1, B2, E>, io::Error>;
 
 /// Return a client handle and a handle used to receive requests on
 pub fn pair<R1, R2, B1, B2, E>() -> Pair<R1, R2, B1, B2, E>
@@ -51,7 +51,7 @@ pub fn pair<R1, R2, B1, B2, E>() -> Pair<R1, R2, B1, B2, E>
           E: From<Error<E>>,
 {
     // Create a stream
-    let (tx, rx) = stream::channel();
+    let (tx, rx) = spsc::channel();
 
     // Use the sender handle to create a `Client` handle
     let client = Client { tx: RefCell::new(tx.into()) };
@@ -73,10 +73,16 @@ impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
     type Future = Response<Self::Response, E>;
 
     fn call(&self, request: Self::Request) -> Self::Future {
-        let (tx, rx) = futures::oneshot();
+        let (tx, rx) = oneshot::channel();
 
         // TODO: handle error
-        self.tx.borrow_mut().send(Ok((request, tx)));
+        match self.tx.borrow_mut().start_send(Ok((request, tx))) {
+            Ok(AsyncSink::Ready) => {}
+            Ok(AsyncSink::NotReady(_)) => {
+                panic!("not ready to send a new request")
+            }
+            Err(_) => panic!("receiving end of client is gone"),
+        }
 
         Response { inner: rx }
     }

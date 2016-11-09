@@ -26,7 +26,6 @@ mod body;
 mod error;
 mod io;
 mod message;
-mod sender;
 
 pub use body::Body;
 pub use client::Client;

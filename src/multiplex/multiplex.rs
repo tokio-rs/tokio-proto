@@ -1,12 +1,11 @@
 use {Message, Body, Error};
-use super::{Frame, RequestId, Transport};
-use super::frame_buf::{FrameBuf, FrameDeque};
-use sender::Sender;
-use futures::{Future, Poll, Async};
-use futures::stream::{Stream};
-use std::io;
-use std::collections::{HashMap, VecDeque};
+use futures::sync::spsc;
+use futures::{Future, Poll, Async, Stream, Sink, AsyncSink};
 use std::collections::hash_map::Entry;
+use std::collections::{HashMap, VecDeque};
+use std::io;
+use super::frame_buf::{FrameBuf, FrameDeque};
+use super::{Frame, RequestId, Transport};
 
 /*
  * TODO:
@@ -82,7 +81,7 @@ struct Exchange<T: Dispatch> {
     responded: bool,
 
     // The outbound body stream sender
-    out_body: Option<Sender<T::BodyOut, T::Error>>,
+    out_body: Option<spsc::Sender<T::BodyOut, T::Error>>,
 
     // Buffers outbound body chunks until the sender is ready
     out_deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>,
@@ -276,7 +275,6 @@ impl<T> Multiplex<T> where T: Dispatch {
             Frame::Message { id, message, body, solo } => {
                 if body {
                     let (tx, rx) = Body::pair();
-                    let tx = Sender::new(tx);
                     let message = Message::WithBody(message, rx);
 
                     try!(self.process_out_message(id, message, Some(tx), solo));
@@ -307,7 +305,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     fn process_out_message(&mut self,
                            id: RequestId,
                            message: Message<T::Out, Body<T::BodyOut, T::Error>>,
-                           body: Option<Sender<T::BodyOut, T::Error>>,
+                           body: Option<spsc::Sender<T::BodyOut, T::Error>>,
                            solo: bool)
                            -> io::Result<()>
     {
@@ -862,18 +860,15 @@ impl<T: Dispatch> Exchange<T> {
                 // If there is a chunk (vs. None which represents end of
                 // stream)
                 if let Some(chunk) = chunk {
-                    // Send the chunk
-                    sender.send(chunk);
-
-                    // See if the sender is ready again
-                    match sender.poll_ready() {
-                        Ok(Async::Ready(_)) => {
+                    match sender.start_send(chunk) {
+                        Ok(AsyncSink::Ready) => {
                             trace!("   --> ready for more");
                             // The sender is ready for another message
                             return;
                         }
-                        Ok(Async::NotReady) => {
+                        Ok(AsyncSink::NotReady(chunk)) => {
                             // The sender is not ready for another message
+                            self.out_deque.push(Some(chunk));
                             self.out_is_ready = false;
                             return;
                         }
@@ -920,31 +915,22 @@ impl<T: Dispatch> Exchange<T> {
             self.out_is_ready = true;
 
             loop {
-                match sender.poll_ready() {
-                    Ok(Async::Ready(())) => {
-                        // Pop a pending frame
-                        match self.out_deque.pop() {
-                            Some(Some(Ok(chunk))) => {
-                                sender.send(Ok(chunk));
-                            }
-                            Some(Some(Err(e))) => {
-                                // Send the error then break as it is the final
-                                // chunk
-                                sender.send(Err(e));
-                                break;
-                            }
-                            Some(None) => {
-                                break;
-                            }
-                            None => {
-                                // No more frames to flush
-                                return Ok(());
-                            }
-                        }
+                // Pop a pending frame
+                let msg = match self.out_deque.pop() {
+                    Some(Some(msg)) => msg,
+                    Some(None) => break,
+                    None => {
+                        // No more frames to flush
+                        return Ok(());
                     }
-                    Ok(Async::NotReady) => {
+                };
+                let done = msg.is_err();
+                match sender.start_send(msg) {
+                    Ok(AsyncSink::Ready) => {}
+                    Ok(AsyncSink::NotReady(msg)) => {
                         trace!("   --> not ready");
                         // Sender not ready
+                        self.out_deque.push(Some(msg));
                         self.out_is_ready = false;
                         return Ok(());
                     }
@@ -958,6 +944,10 @@ impl<T: Dispatch> Exchange<T> {
                         // TODO: Notify transport
                         break;
                     }
+                }
+
+                if done {
+                    break
                 }
             }
         }
