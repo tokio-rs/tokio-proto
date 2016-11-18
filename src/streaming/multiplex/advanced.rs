@@ -1,11 +1,19 @@
-use {Message, Body, Error};
-use futures::sync::spsc;
+//! Provides the substrate for implementing multiplexed, streaming protocols.
+//!
+//! In most cases, it's sufficient to work with `streaming::pipeline::{Client,
+//! Server}` instead. But for some advanced protocols in which the client and
+//! servers have more of a peer relationship, it's useful to work directly with
+//! these implementation details.
+
+use streaming::{Message, Body};
+use futures::sync::mpsc;
 use futures::{Future, Poll, Async, Stream, Sink, AsyncSink};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use super::frame_buf::{FrameBuf, FrameDeque};
-use super::{Frame, RequestId, Transport};
+use super::{Frame, RequestId};
+use transport::Transport;
 
 /*
  * TODO:
@@ -81,7 +89,7 @@ struct Exchange<T: Dispatch> {
     responded: bool,
 
     // The outbound body stream sender
-    out_body: Option<spsc::Sender<T::BodyOut, T::Error>>,
+    out_body: Option<mpsc::Sender<Result<T::BodyOut, T::Error>>>,
 
     // Buffers outbound body chunks until the sender is ready
     out_deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>,
@@ -122,32 +130,32 @@ pub struct MultiplexMessage<T, B, E> {
 }
 
 /// Dispatch messages from the transport to the service
-pub trait Dispatch: 'static {
+pub trait Dispatch {
+    /// Type of underlying I/O object
+    type Io;
 
     /// Messages written to the transport
-    type In: 'static;
+    type In;
 
     /// Inbound body frame
-    type BodyIn: 'static;
+    type BodyIn;
 
     /// Messages read from the transport
-    type Out: 'static;
+    type Out;
 
     /// Outbound body frame
-    type BodyOut: 'static;
+    type BodyOut;
 
     /// Transport error
-    type Error: From<Error<Self::Error>> + 'static;
+    type Error: From<io::Error>;
 
     /// Inbound body stream type
-    type Stream: Stream<Item = Self::BodyIn, Error = Self::Error> + 'static;
+    type Stream: Stream<Item = Self::BodyIn, Error = Self::Error>;
 
     /// Transport type
-    type Transport: Transport<In = Self::In,
-                          BodyIn = Self::BodyIn,
-                             Out = Self::Out,
-                         BodyOut = Self::BodyOut,
-                           Error = Self::Error>;
+    type Transport: Transport<Self::Io,
+                              ReadFrame = Frame<Self::Out, Self::BodyOut, Self::Error>,
+                              WriteFrame = Frame<Self::In, Self::BodyIn, Self::Error>>;
 
     /// Mutable reference to the transport
     fn transport(&mut self) -> &mut Self::Transport;
@@ -257,7 +265,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         while self.run {
             // TODO: Only read frames if there is available space in the frame
             // buffer
-            if let Async::Ready(frame) = try!(self.dispatch.transport().read()) {
+            if let Async::Ready(frame) = try!(self.dispatch.transport().poll()) {
                 try!(self.process_out_frame(frame));
             } else {
                 break;
@@ -268,11 +276,13 @@ impl<T> Multiplex<T> where T: Dispatch {
     }
 
     /// Process outbound frame
-    fn process_out_frame(&mut self, frame: Frame<T::Out, T::BodyOut, T::Error>) -> io::Result<()> {
+    fn process_out_frame(&mut self,
+                         frame: Option<Frame<T::Out, T::BodyOut, T::Error>>)
+                         -> io::Result<()> {
         trace!("Multiplex::process_out_frame");
 
         match frame {
-            Frame::Message { id, message, body, solo } => {
+            Some(Frame::Message { id, message, body, solo }) => {
                 if body {
                     let (tx, rx) = Body::pair();
                     let message = Message::WithBody(message, rx);
@@ -284,14 +294,14 @@ impl<T> Multiplex<T> where T: Dispatch {
                     try!(self.process_out_message(id, message, None, solo));
                 }
             }
-            Frame::Body { id, chunk } => {
+            Some(Frame::Body { id, chunk }) => {
                 trace!("   --> read out body chunk");
                 self.process_out_body_chunk(id, Ok(chunk));
             }
-            Frame::Error { id, error } => {
+            Some(Frame::Error { id, error }) => {
                 try!(self.process_out_err(id, error));
             }
-            Frame::Done => {
+            None => {
                 trace!("read Frame::Done");
                 // TODO: Ensure all bodies have been completed
                 self.run = false;
@@ -305,7 +315,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     fn process_out_message(&mut self,
                            id: RequestId,
                            message: Message<T::Out, Body<T::BodyOut, T::Error>>,
-                           body: Option<spsc::Sender<T::BodyOut, T::Error>>,
+                           body: Option<mpsc::Sender<Result<T::BodyOut, T::Error>>>,
                            solo: bool)
                            -> io::Result<()>
     {
@@ -478,7 +488,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     fn write_in_messages(&mut self) -> io::Result<()> {
         trace!("write in messages");
 
-        while self.dispatch.transport().poll_write().is_ready() {
+        while try!(self.dispatch.transport().poll_complete()).is_ready() {
             trace!("   --> polling for in frame");
 
             match try!(self.dispatch.poll()) {
@@ -540,7 +550,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         };
 
         // Write the frame
-        try!(self.dispatch.transport().write(frame));
+        try!(assert_send(self.dispatch.transport(), frame));
         self.blocked_on_flush.wrote_frame();
 
         match self.exchanges.entry(id) {
@@ -599,7 +609,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
             // Write the error frame
             let frame = Frame::Error { id: id, error: error };
-            try!(self.dispatch.transport().write(frame));
+            try!(assert_send(self.dispatch.transport(), frame));
             self.blocked_on_flush.wrote_frame();
 
             e.remove();
@@ -621,7 +631,7 @@ impl<T> Multiplex<T> where T: Dispatch {
             trace!("   --> checking request {:?}", id);
 
             loop {
-                if !self.dispatch.transport().poll_write().is_ready() {
+                if !try!(self.dispatch.transport().poll_complete()).is_ready() {
                     trace!("   --> blocked on transport");
                     self.blocked_on_flush.transport_not_write_ready();
                     break 'outer;
@@ -632,14 +642,14 @@ impl<T> Multiplex<T> where T: Dispatch {
                         trace!("   --> got chunk");
 
                         let frame = Frame::Body { id: id, chunk: Some(chunk) };
-                        try!(self.dispatch.transport().write(frame));
+                        try!(assert_send(self.dispatch.transport(), frame));
                         self.blocked_on_flush.wrote_frame();
                     }
                     Ok(Async::Ready(None)) => {
                         trace!("   --> end of stream");
 
                         let frame = Frame::Body { id: id, chunk: None };
-                        try!(self.dispatch.transport().write(frame));
+                        try!(assert_send(self.dispatch.transport(), frame));
                         self.blocked_on_flush.wrote_frame();
 
                         // in_body is fully written.
@@ -651,7 +661,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
                         // Write the error frame
                         let frame = Frame::Error { id: id, error: error };
-                        try!(self.dispatch.transport().write(frame));
+                        try!(assert_send(self.dispatch.transport(), frame));
                         self.blocked_on_flush.wrote_frame();
 
                         exchange.responded = true;
@@ -683,7 +693,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.is_flushed = try!(self.dispatch.transport().flush()).is_ready();
+        self.is_flushed = try!(self.dispatch.transport().poll_complete()).is_ready();
 
         if self.is_flushed && self.blocked_on_flush == WriteState::Blocked {
             self.made_progress = true;
@@ -979,6 +989,18 @@ impl WriteState {
     fn wrote_frame(&mut self) {
         if *self == WriteState::NoWrite {
             *self = WriteState::Wrote;
+        }
+    }
+}
+
+fn assert_send<A, T>(s: &mut T, item: T::WriteFrame) -> Result<(), io::Error>
+    where T: Transport<A>
+{
+    match try!(s.start_send(item)) {
+        AsyncSink::Ready => Ok(()),
+        AsyncSink::NotReady(_) => {
+            panic!("sink reported itself as ready after `poll_complete` but was \
+                    then unable to accept a message")
         }
     }
 }

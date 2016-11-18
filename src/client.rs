@@ -1,108 +1,78 @@
-//! Utilities for building protocol clients
-//!
-//! Provides a channel that handles details of providing a `Service` client.
-//! Usually, this module does not have to be used directly. Instead it is used
-//! by `pipeline` and `multiplex` in the `connect` fns.
-//!
-//! However, some protocols require implementing the dispatch layer directly,
-//! in which case using client channel is helpful.
-
-// Allow warnings in order to prevent the compiler from outputting an error
-// that seems to be fixed on nightly.
-#![allow(warnings)]
-
-use {Error, Message};
-use tokio_service::Service;
-use futures::{Future, Async, Poll, Stream, AsyncSink, Sink};
-use futures::sync::spsc;
-use futures::sync::oneshot;
 use std::io;
-use std::cell::RefCell;
+use std::sync::Arc;
+use std::net::SocketAddr;
+use std::marker::PhantomData;
 
-/// Client `Service` for pipeline or multiplex protocols
-pub struct Client<R1, R2, B1, B2, E>
-    where B1: Stream<Error = E>,
-          E: From<Error<E>>,
-{
-    tx: RefCell<spsc::Sender<Envelope<R1, R2, B1, B2, E>, io::Error>>,
+use BindClient;
+use tokio_core::reactor::Handle;
+use tokio_core::net::{TcpStream, TcpStreamNew};
+use futures::{Future, Poll, Async};
+
+// TODO: add configuration, e.g.:
+// - connection timeout
+// - multiple addresses
+// - request timeout
+
+// TODO: consider global event loop handle, so that providing one in the builder
+// is optional
+
+/// Builds client connections to external services.
+///
+/// To connect to a service, you need a *client protocol* implementation; see
+/// the crate documentation for guidance.
+///
+/// At the moment, this builder offers minimal configuration, but more will be
+/// added over time.
+pub struct Client<Kind, P> {
+    _kind: PhantomData<Kind>,
+    proto: Arc<P>,
 }
 
-/// Response future returned from a client
-pub struct Response<T, E> {
-    inner: oneshot::Receiver<Result<T, E>>,
+/// A future for establishing a client connection.
+///
+/// Yields a service for interacting with the server.
+pub struct Connect<Kind, P> {
+    _kind: PhantomData<Kind>,
+    proto: Arc<P>,
+    socket: TcpStreamNew,
+    handle: Handle,
 }
 
-/// Message used to dispatch requests to the task managing the client
-/// connection.
-type Envelope<R1, R2, B1, B2, E> =
-    (Message<R1, B1>, oneshot::Sender<Result<Message<R2, B2>, E>>);
+impl<Kind, P> Future for Connect<Kind, P> where P: BindClient<Kind, TcpStream> {
+    type Item = P::BindClient;
+    type Error = io::Error;
 
-/// A client / receiver pair
-pub type Pair<R1, R2, B1, B2, E> =
-    (Client<R1, R2, B1, B2, E>, Receiver<R1, R2, B1, B2, E>);
-
-/// Receive requests submitted to the client
-pub type Receiver<R1, R2, B1, B2, E> =
-    spsc::Receiver<Envelope<R1, R2, B1, B2, E>, io::Error>;
-
-/// Return a client handle and a handle used to receive requests on
-pub fn pair<R1, R2, B1, B2, E>() -> Pair<R1, R2, B1, B2, E>
-    where B1: Stream<Error = E>,
-          E: From<Error<E>>,
-{
-    // Create a stream
-    let (tx, rx) = spsc::channel();
-
-    // Use the sender handle to create a `Client` handle
-    let client = Client { tx: RefCell::new(tx.into()) };
-
-    // Return the pair
-    (client, rx)
-}
-
-impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
-    where R1: 'static,
-          R2: 'static,
-          B1: Stream<Error = E> + 'static,
-          B2: 'static,
-          E: From<Error<E>> + 'static,
-{
-    type Request = Message<R1, B1>;
-    type Response = Message<R2, B2>;
-    type Error = E;
-    type Future = Response<Self::Response, E>;
-
-    fn call(&self, request: Self::Request) -> Self::Future {
-        let (tx, rx) = oneshot::channel();
-
-        // TODO: handle error
-        match self.tx.borrow_mut().start_send(Ok((request, tx))) {
-            Ok(AsyncSink::Ready) => {}
-            Ok(AsyncSink::NotReady(_)) => {
-                panic!("not ready to send a new request")
-            }
-            Err(_) => panic!("receiving end of client is gone"),
-        }
-
-        Response { inner: rx }
+    fn poll(&mut self) -> Poll<P::BindClient, io::Error> {
+        let socket = try_ready!(self.socket.poll());
+        Ok(Async::Ready(self.proto.bind_client(&self.handle, socket)))
     }
 }
 
-impl<T, E> Future for Response<T, E>
-    where E: From<Error<E>>,
-{
-    type Item = T;
-    type Error = E;
+impl<Kind, P> Client<Kind, P> where P: BindClient<Kind, TcpStream> {
+    /// Create a builder for the given client protocol.
+    ///
+    /// To connect to a service, you need a *client protocol* implementation;
+    /// see the crate documentation for guidance.
+    pub fn new(protocol: P) -> Client<Kind, P> {
+        Client {
+            _kind: PhantomData,
+            proto: Arc::new(protocol)
+        }
+    }
 
-    fn poll(&mut self) -> Poll<T, E> {
-        match self.inner.poll() {
-            Ok(Async::Ready(Ok(v))) => Ok(Async::Ready(v)),
-            Ok(Async::Ready(Err(e))) => Err(e),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Err(_) => {
-                let e = Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
-                Err(e.into())
-            }
+    /// Establish a connection to the given address.
+    ///
+    /// # Return value
+    ///
+    /// Returns a future for the establishment of the connection. When the
+    /// future completes, it yields an instance of `Service` for interacting
+    /// with the server.
+    pub fn connect(&self, addr: &SocketAddr, handle: &Handle) -> Connect<Kind, P> {
+        Connect {
+            _kind: PhantomData,
+            proto: self.proto.clone(),
+            socket: TcpStream::connect(addr, handle),
+            handle: handle.clone(),
         }
     }
 }

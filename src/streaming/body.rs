@@ -1,10 +1,11 @@
 use futures::{Async, Poll};
-use futures::stream::{self, Stream, Receiver, Sender};
+use futures::stream::Stream;
+use futures::sync::mpsc;
 use std::fmt;
 
 /// Body stream
 pub struct Body<T, E> {
-    inner: Option<Receiver<T, E>>,
+    inner: Option<mpsc::Receiver<Result<T, E>>>,
 }
 
 impl<T, E> Body<T, E> {
@@ -14,8 +15,8 @@ impl<T, E> Body<T, E> {
     }
 
     /// Return a body stream with an associated sender half
-    pub fn pair() -> (Sender<T, E>, Body<T, E>) {
-        let (tx, rx) = stream::channel();
+    pub fn pair() -> (mpsc::Sender<Result<T, E>>, Body<T, E>) {
+        let (tx, rx) = mpsc::channel(0);
         let rx = Body { inner: Some(rx) };
         (tx, rx)
     }
@@ -27,14 +28,21 @@ impl<T, E> Stream for Body<T, E> {
 
     fn poll(&mut self) -> Poll<Option<T>, E> {
         match self.inner {
-            Some(ref mut s) => s.poll(),
+            Some(ref mut s) => {
+                match s.poll().unwrap() {
+                    Async::Ready(None) => Ok(Async::Ready(None)),
+                    Async::Ready(Some(Ok(e))) => Ok(Async::Ready(Some(e))),
+                    Async::Ready(Some(Err(e))) => Err(e),
+                    Async::NotReady => Ok(Async::NotReady),
+                }
+            }
             None => Ok(Async::Ready(None)),
         }
     }
 }
 
-impl<T, E> From<Receiver<T, E>> for Body<T, E> {
-    fn from(src: Receiver<T, E>) -> Body<T, E> {
+impl<T, E> From<mpsc::Receiver<Result<T, E>>> for Body<T, E> {
+    fn from(src: mpsc::Receiver<Result<T, E>>) -> Body<T, E> {
         Body { inner: Some(src) }
     }
 }
