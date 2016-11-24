@@ -21,7 +21,7 @@ use std::cell::RefCell;
 
 /// Client `Service` for pipeline or multiplex protocols
 pub struct ClientProxy<R, S, E> {
-    tx: RefCell<mpsc::Sender<io::Result<Envelope<R, S, E>>>>,
+    tx: RefCell<mpsc::UnboundedSender<io::Result<Envelope<R, S, E>>>>,
 }
 
 /// Response future returned from a client
@@ -37,12 +37,12 @@ type Envelope<R, S, E> = (R, oneshot::Sender<Result<S, E>>);
 pub type Pair<R, S, E> = (ClientProxy<R, S, E>, Receiver<R, S, E>);
 
 /// Receive requests submitted to the client
-pub type Receiver<R, S, E> = mpsc::Receiver<io::Result<Envelope<R, S, E>>>;
+pub type Receiver<R, S, E> = mpsc::UnboundedReceiver<io::Result<Envelope<R, S, E>>>;
 
 /// Return a client handle and a handle used to receive requests on
 pub fn pair<R, S, E>() -> Pair<R, S, E> {
     // Create a stream
-    let (tx, rx) = mpsc::channel(0);
+    let (tx, rx) = mpsc::unbounded();
 
     // Use the sender handle to create a `Client` handle
     let client = ClientProxy { tx: RefCell::new(tx) };
@@ -61,11 +61,9 @@ impl<R, S, E: From<io::Error>> Service for ClientProxy<R, S, E> {
         let (tx, rx) = oneshot::channel();
 
         // TODO: handle error
-        match self.tx.borrow_mut().start_send(Ok((request, tx))) {
-            Ok(AsyncSink::Ready) => {}
-            Ok(AsyncSink::NotReady(_)) => {
-                panic!("not ready to send a new request")
-            }
+        match mpsc::UnboundedSender::send(&mut self.tx.borrow_mut(),
+                                          Ok((request, tx))) {
+            Ok(()) => {}
             Err(_) => panic!("receiving end of client is gone"),
         }
 

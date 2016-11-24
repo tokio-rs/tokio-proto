@@ -794,7 +794,7 @@ impl<T: Dispatch> Exchange<T> {
             responded: false,
             out_body: None,
             out_deque: deque,
-            out_is_ready: false,
+            out_is_ready: true,
             in_body: None,
         }
     }

@@ -1,7 +1,7 @@
-use futures::{Async, Poll};
-use futures::stream::Stream;
-use futures::sync::mpsc;
 use std::fmt;
+
+use futures::{Async, Poll, Stream};
+use futures::sync::mpsc;
 
 /// Body stream
 pub struct Body<T, E> {

@@ -1,341 +1,324 @@
 extern crate futures;
-extern crate lazycell;
-extern crate mio;
+extern crate tokio_core;
+extern crate tokio_proto;
+extern crate tokio_service;
+extern crate env_logger;
 
-use self::futures::{Async, Poll};
-use self::lazycell::LazyCell;
-use self::mio::{Evented, Ready, PollOpt, Registration, SetReadiness, Token};
-use tokio_core::io::FramedIo;
-use tokio_core::reactor::{PollEvented, Handle};
-use std::{fmt, io};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Sender, Receiver};
+use std::any::Any;
+use std::thread;
+use std::cell::RefCell;
+use std::io::{self, Read, Write};
 
-pub struct Transport<In, Out> {
-    tx: Sender<Write<In>>,
-    source: PollEvented<Io<Out>>,
-    pending: Option<In>,
-}
+use self::futures::stream::Wait;
+use self::futures::sync::mpsc;
+use self::futures::sync::oneshot;
+use self::futures::{Future, Stream, Sink, Poll, StartSend, Async};
+use self::tokio_core::io::Io;
+use self::tokio_core::reactor::Core;
+use self::tokio_proto::streaming::multiplex;
+use self::tokio_proto::streaming::pipeline;
+use self::tokio_proto::streaming::{Message, Body};
+use self::tokio_proto::transport::Transport;
+use self::tokio_proto::util::client_proxy::Response;
+use self::tokio_proto::{BindClient, BindServer};
+use self::tokio_service::Service;
 
-pub struct NewTransport<In, Out> {
-    tx: Sender<Write<In>>,
-    inner: Arc<Mutex<Inner<Out>>>,
-    handle: Handle,
-}
+struct MockProtocol<T>(RefCell<Option<MockTransport<T>>>);
 
-pub struct TransportHandle<In, Out> {
-    // A Receiver is needed in order to block waiting for messages
-    rx: Receiver<Write<In>>,
-    inner: Arc<Mutex<Inner<Out>>>,
-}
-
-// Used to register w/ mio
-struct Io<Out> {
-    registration: LazyCell<Registration>,
-    inner: Arc<Mutex<Inner<Out>>>,
-}
-
-// Shared between `TransportHandle` and `Transport`
-struct Inner<Out> {
-    // Messages the transport can read
-    read_buffer: Vec<io::Result<Out>>,
-    // What the next write will do
-    write_capability: Vec<WriteCap>,
-    // Signals to the reactor that readiness changed
-    set_readiness: LazyCell<SetReadiness>,
-}
-
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-enum WriteCap {
-    Write,
-    Flush,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Write<T> {
-    Write(T),
-    Flush,
-    Drop,
-}
-
-/// Create a new mock transport pair
-pub fn transport<In, Out>(handle: Handle) -> (TransportHandle<In, Out>, NewTransport<In, Out>) {
-    let (tx, rx) = mpsc::channel();
-
-    let inner = Arc::new(Mutex::new(Inner {
-        read_buffer: vec![],
-        write_capability: vec![],
-        set_readiness: LazyCell::new(),
-    }));
-
-    let new_transport = NewTransport {
-        handle: handle,
-        tx: tx,
-        inner: inner.clone(),
-    };
-
-    let handle = TransportHandle {
-        rx: rx,
-        inner: inner,
-    };
-
-    (handle, new_transport)
-}
-
-impl<In: fmt::Debug, Out> TransportHandle<In, Out> {
-
-    /// Send a message to the transport.
-    ///
-    /// The transport will become readable and the next call to `::read()` will
-    /// return the given message.
-    pub fn send(&self, v: Out) {
-        self.inner.lock().unwrap().send(Ok(v));
-    }
-
-    /// Send an error to the transport;
-    ///
-    /// The transport will become readable and the next call to `::read()` will
-    /// return the given error
-    pub fn error(&self, e: io::Error) {
-        self.inner.lock().unwrap().send(Err(e));
-    }
-
-    /// Allow the transport to write a message.
-    pub fn allow_write(&self) {
-        self.inner.lock().unwrap().allow_write(WriteCap::Write);
-    }
-
-    /// Receive a write from the transport
-    pub fn next_write(&self) -> In {
-        match self.rx.recv().unwrap() {
-            Write::Write(v) => v,
-            Write::Flush => panic!("expected write; actual=Flush"),
-            Write::Drop => panic!("expected write; actual=Drop"),
-        }
-    }
-
-    /// Allow the transport to attempt to flush a message
-    pub fn allow_flush(&self) {
-        self.inner.lock().unwrap().allow_write(WriteCap::Flush);
-    }
-
-    pub fn assert_flush(&self) {
-        match self.rx.recv().unwrap() {
-            Write::Flush => {},
-            Write::Write(v) => panic!("expected flush; actual={:?}", v),
-            Write::Drop => panic!("expected flush; actual=Drop"),
-        }
-    }
-
-    pub fn allow_and_assert_flush(&self) {
-        self.allow_flush();
-        self.assert_flush();
-    }
-
-    pub fn assert_drop(&self) {
-        match self.rx.recv().unwrap() {
-            Write::Drop => {},
-            Write::Write(v) => panic!("expected flush; actual={:?}", v),
-            Write::Flush => panic!("expected write; actual=Flush"),
-        }
-    }
-
-    pub fn allow_and_assert_drop(&self) {
-        self.allow_write();
-        self.assert_drop();
-    }
-
-    pub fn assert_no_write(&self, ms: u64) {
-        // Unfortunately, mpsc::channel() does not support timeouts on recv, so
-        // for now just sleep
-        super::sleep_ms(ms);
-
-        if let Ok(v) = self.rx.try_recv() {
-            panic!("expected no write; received={:?}", v);
-        }
-    }
-}
-
-impl<In, Out> FramedIo for Transport<In, Out>
-    where In: fmt::Debug,
+impl<T, U, I> pipeline::ClientProto<I> for MockProtocol<pipeline::Frame<T, U, io::Error>>
+    where T: 'static,
+          U: 'static,
+          I: Io + 'static,
 {
-    type In = In;
-    type Out = Out;
+    type Request = T;
+    type RequestBody = U;
+    type Response = T;
+    type ResponseBody = U;
+    type Error = io::Error;
+    type Transport = MockTransport<pipeline::Frame<T, U, io::Error>>;
 
-    fn poll_read(&mut self) -> Async<()> {
-        self.source.poll_read()
-    }
-
-    /// Read a message frame from the `FramedIo`
-    fn read(&mut self) -> Poll<Out, io::Error> {
-        match self.source.get_ref().inner.lock().unwrap().recv() {
-            Some(Ok(v)) => Ok(Async::Ready(v)),
-            Some(Err(e)) => Err(e),
-            None => {
-                self.source.need_read();
-                Ok(Async::NotReady)
-            }
-        }
-    }
-
-    fn poll_write(&mut self) -> Async<()> {
-        if self.pending.is_some() {
-            return Async::NotReady;
-        }
-
-        self.source.poll_write()
-    }
-
-    /// Write a message frame to the `FramedIo`
-    fn write(&mut self, req: In) -> Poll<(), io::Error> {
-        if !self.poll_write().is_ready() {
-            panic!("cannot write request when not writable");
-        }
-
-        trace!("transport write; frame={:?}", req);
-
-        self.pending = Some(req);
-        self.flush()
-    }
-
-    fn flush(&mut self) -> Poll<(), io::Error> {
-        if !self.source.poll_write().is_ready() {
-            return Ok(Async::NotReady)
-        }
-
-        if self.pending.is_none() {
-            return Ok(Async::Ready(()));
-        }
-
-        trace!("transport flush");
-
-        let mut inner = self.source.get_ref().inner.lock().unwrap();
-
-        while let Some(cap) = shift(&mut inner.write_capability) {
-            inner.set_readiness();
-
-            match cap {
-                WriteCap::Flush => self.tx.send(Write::Flush).unwrap(),
-                WriteCap::Write => {
-                    let val = self.pending.take().unwrap();
-                    self.tx.send(Write::Write(val)).unwrap();
-                    return Ok(Async::Ready(()));
-                }
-            }
-        }
-
-        self.source.need_write();
-        Ok(Async::NotReady)
+    fn bind_transport(&self, _io: I)
+                      -> MockTransport<pipeline::Frame<T, U, io::Error>> {
+        self.0.borrow_mut().take().unwrap()
     }
 }
 
-impl<In, Out> Drop for Transport<In, Out> {
+impl<T, U, I> multiplex::ClientProto<I> for MockProtocol<multiplex::Frame<T, U, io::Error>>
+    where T: 'static,
+          U: 'static,
+          I: Io + 'static,
+{
+    type Request = T;
+    type RequestBody = U;
+    type Response = T;
+    type ResponseBody = U;
+    type Error = io::Error;
+    type Transport = MockTransport<multiplex::Frame<T, U, io::Error>>;
+
+    fn bind_transport(&self, _io: I)
+                      -> MockTransport<multiplex::Frame<T, U, io::Error>> {
+        self.0.borrow_mut().take().unwrap()
+    }
+}
+
+impl<T, U, I> pipeline::ServerProto<I> for MockProtocol<pipeline::Frame<T, U, io::Error>>
+    where T: 'static,
+          U: 'static,
+          I: Io + 'static,
+{
+    type Request = T;
+    type RequestBody = U;
+    type Response = T;
+    type ResponseBody = U;
+    type Error = io::Error;
+    type Transport = MockTransport<pipeline::Frame<T, U, io::Error>>;
+
+    fn bind_transport(&self, _io: I)
+                      -> MockTransport<pipeline::Frame<T, U, io::Error>> {
+        self.0.borrow_mut().take().unwrap()
+    }
+}
+
+impl<T, U, I> multiplex::ServerProto<I> for MockProtocol<multiplex::Frame<T, U, io::Error>>
+    where T: 'static,
+          U: 'static,
+          I: Io + 'static,
+{
+    type Request = T;
+    type RequestBody = U;
+    type Response = T;
+    type ResponseBody = U;
+    type Error = io::Error;
+    type Transport = MockTransport<multiplex::Frame<T, U, io::Error>>;
+
+    fn bind_transport(&self, _io: I)
+                      -> MockTransport<multiplex::Frame<T, U, io::Error>> {
+        self.0.borrow_mut().take().unwrap()
+    }
+}
+
+struct MockTransport<T> {
+    tx: mpsc::Sender<T>,
+    rx: mpsc::UnboundedReceiver<io::Result<T>>,
+}
+
+impl<T> Stream for MockTransport<T> {
+    type Item = T;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Option<T>, io::Error> {
+        match self.rx.poll().expect("rx cannot fail") {
+            Async::Ready(Some(Ok(e))) => Ok(Async::Ready(Some(e))),
+            Async::Ready(Some(Err(e))) => Err(e),
+            Async::Ready(None) => Ok(Async::Ready(None)),
+            Async::NotReady => Ok(Async::NotReady),
+        }
+    }
+}
+
+impl<T> Sink for MockTransport<T> {
+    type SinkItem = T;
+    type SinkError = io::Error;
+
+    fn start_send(&mut self, item: T) -> StartSend<T, io::Error> {
+        Ok(self.tx.start_send(item).expect("should not be closed"))
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), io::Error> {
+        Ok(self.tx.poll_complete().expect("should not close"))
+    }
+}
+
+impl<A, T: 'static> Transport<A> for MockTransport<T> {}
+
+struct MockIo;
+
+impl Read for MockIo {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        panic!("should not be used")
+    }
+}
+
+impl Write for MockIo {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        panic!("should not be used")
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        panic!("should not be used")
+    }
+}
+
+impl Io for MockIo {}
+
+pub type MockBodyStream = Box<Stream<Item = u32, Error = io::Error> + Send>;
+
+pub struct MockTransportCtl<T> {
+    tx: Option<mpsc::UnboundedSender<io::Result<T>>>,
+    rx: Wait<mpsc::Receiver<T>>,
+}
+
+impl<T> MockTransportCtl<T> {
+    pub fn send(&mut self, msg: T) {
+        mpsc::UnboundedSender::send(self.tx.as_mut().unwrap(), Ok(msg))
+            .expect("should not be closed");
+    }
+
+    pub fn error(&mut self, error: io::Error) {
+        mpsc::UnboundedSender::send(self.tx.as_mut().unwrap(), Err(error))
+            .expect("should not be closed");
+    }
+
+    pub fn next_write(&mut self) -> T {
+        self.rx.next().unwrap().expect("cannot error")
+    }
+
+    pub fn allow_and_assert_drop(&mut self) {
+        drop(self.tx.take());
+        assert!(self.rx.next().is_none());
+    }
+}
+
+fn transport<T>() -> (MockTransportCtl<T>, MockProtocol<T>) {
+    let (tx1, rx1) = mpsc::channel(1);
+    let (tx2, rx2) = mpsc::unbounded();
+    let ctl = MockTransportCtl {
+        tx: Some(tx2),
+        rx: rx1.wait(),
+    };
+    let transport = MockTransport {
+        tx: tx1,
+        rx: rx2,
+    };
+    (ctl, MockProtocol(RefCell::new(Some(transport))))
+}
+
+struct CompleteOnDrop {
+    thread: Option<thread::JoinHandle<()>>,
+    tx: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for CompleteOnDrop {
     fn drop(&mut self) {
-        trace!("transport dropping");
-        let _ = self.tx.send(Write::Drop);
+        self.tx.take().unwrap().complete(());
+        self.thread.take().unwrap().join().unwrap();
     }
 }
 
-fn shift<T>(queue: &mut Vec<T>) -> Option<T> {
-    if queue.len() == 0 {
-        return None;
-    }
-
-    Some(queue.remove(0))
-}
-
-impl<In, Out> NewTransport<In, Out>
-    where In: Send + 'static,
-          Out: Send + 'static,
+pub fn pipeline_client()
+    -> (MockTransportCtl<pipeline::Frame<&'static str, u32, io::Error>>,
+        Box<Service<Request = Message<&'static str, MockBodyStream>,
+                    Response = Message<&'static str, Body<u32, io::Error>>,
+                    Error = io::Error,
+                    Future = Response<Message<&'static str, Body<u32, io::Error>>,
+                                              io::Error>>>,
+        Box<Any>)
 {
-    pub fn new_transport(self) -> io::Result<Transport<In, Out>> {
-        let NewTransport { tx, inner, handle } = self;
+    drop(env_logger::init());
 
-        let io = Io {
-            registration: LazyCell::new(),
-            inner: inner,
-        };
+    let (ctl, proto) = transport();
 
-        let source = try!(PollEvented::new(io, &handle));
+    let (tx, rx) = oneshot::channel();
+    let (finished_tx, finished_rx) = oneshot::channel();
+    let t = thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
 
-        Ok(Transport {
-            tx: tx,
-            source: source,
-            pending: None,
-        })
-    }
+        let service = proto.bind_client(&handle, MockIo);
+        tx.complete(service);
+        drop(core.run(finished_rx));
+    });
+
+    let service = rx.wait().unwrap();
+
+    let srv = CompleteOnDrop {
+        thread: Some(t),
+        tx: Some(finished_tx),
+    };
+    return (ctl, Box::new(service), Box::new(srv));
 }
 
-impl<Out> Inner<Out> {
-    fn send(&mut self, v: io::Result<Out>) {
-        self.read_buffer.push(v);
-        self.set_readiness();
-    }
+pub fn pipeline_server<S>(s: S)
+    -> (MockTransportCtl<pipeline::Frame<&'static str, u32, io::Error>>, Box<Any>)
+    where S: Service<Request = Message<&'static str, Body<u32, io::Error>>,
+                     Response = Message<&'static str, MockBodyStream>,
+                     Error = io::Error> + Send + 'static,
+{
+    drop(env_logger::init());
 
-    fn recv(&mut self) -> Option<io::Result<Out>> {
-        let ret = shift(&mut self.read_buffer);
-        self.set_readiness();
-        ret
-    }
+    let (ctl, proto) = transport();
 
-    fn allow_write(&mut self, cap: WriteCap) {
-        trace!("allowing write; kind={:?}", cap);
-        self.write_capability.push(cap);
-        self.set_readiness();
-    }
+    let (finished_tx, finished_rx) = oneshot::channel();
+    let t = thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
 
-    fn set_readiness(&self) {
-        if let Some(h) = self.set_readiness.borrow() {
-            let mut readiness = Ready::none();
+        proto.bind_server(&handle, MockIo, s);
+        drop(core.run(finished_rx));
+    });
 
-            if self.read_buffer.len() > 0 {
-                readiness = readiness | Ready::readable();
-            }
-
-            if self.write_capability.len() > 0 {
-                readiness = readiness | Ready::writable();
-            }
-
-            let orig = h.readiness();
-
-            if readiness != orig {
-                trace!("updating readiness; after={:?}; before={:?}", readiness, orig);
-            }
-
-            h.set_readiness(readiness).unwrap();
-        }
-    }
+    let srv = CompleteOnDrop {
+        thread: Some(t),
+        tx: Some(finished_tx),
+    };
+    return (ctl, Box::new(srv));
 }
 
+pub fn multiplex_client()
+    -> (MockTransportCtl<multiplex::Frame<&'static str, u32, io::Error>>,
+        Box<Service<Request = Message<&'static str, MockBodyStream>,
+                    Response = Message<&'static str, Body<u32, io::Error>>,
+                    Error = io::Error,
+                    Future = Response<Message<&'static str, Body<u32, io::Error>>,
+                                              io::Error>>>,
+        Box<Any>)
+{
+    drop(env_logger::init());
 
-impl<T> Evented for Io<T> {
-    fn register(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        if self.registration.filled() {
-            return Err(io::Error::new(io::ErrorKind::Other, "already registered"));
-        }
+    let (ctl, proto) = transport();
 
-        let (registration, set_readiness) = Registration::new(poll, token, interest, opts);
-        let inner = self.inner.lock().unwrap();
+    let (tx, rx) = oneshot::channel();
+    let (finished_tx, finished_rx) = oneshot::channel();
+    let t = thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
 
-        self.registration.fill(registration).ok().unwrap();
-        inner.set_readiness.fill(set_readiness).ok().unwrap();
+        let service = proto.bind_client(&handle, MockIo);
+        tx.complete(service);
+        drop(core.run(finished_rx));
+    });
 
-        inner.set_readiness();
+    let service = rx.wait().unwrap();
 
-        Ok(())
-    }
+    let srv = CompleteOnDrop {
+        thread: Some(t),
+        tx: Some(finished_tx),
+    };
+    return (ctl, Box::new(service), Box::new(srv));
+}
 
-    fn reregister(&self, poll: &mio::Poll, token: Token, interest: Ready, opts: PollOpt) -> io::Result<()> {
-        match self.registration.borrow() {
-            Some(registration) => registration.update(poll, token, interest, opts),
-            None => Err(io::Error::new(io::ErrorKind::Other, "receiver not registered")),
-        }
-    }
+pub fn multiplex_server<S>(s: S)
+    -> (MockTransportCtl<multiplex::Frame<&'static str, u32, io::Error>>, Box<Any>)
+    where S: Service<Request = Message<&'static str, Body<u32, io::Error>>,
+                     Response = Message<&'static str, MockBodyStream>,
+                     Error = io::Error> + Send + 'static,
+{
+    drop(env_logger::init());
 
-    fn deregister(&self, poll: &mio::Poll) -> io::Result<()> {
-        match self.registration.borrow() {
-            Some(registration) => registration.deregister(poll),
-            None => Err(io::Error::new(io::ErrorKind::Other, "receiver not registered")),
-        }
-    }
+    let (ctl, proto) = transport();
+
+    let (finished_tx, finished_rx) = oneshot::channel();
+    let t = thread::spawn(move || {
+        let mut core = Core::new().unwrap();
+        let handle = core.handle();
+
+        proto.bind_server(&handle, MockIo, s);
+        drop(core.run(finished_rx));
+    });
+
+    let srv = CompleteOnDrop {
+        thread: Some(t),
+        tx: Some(finished_tx),
+    };
+    return (ctl, Box::new(srv));
 }
