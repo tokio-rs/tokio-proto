@@ -11,14 +11,16 @@ extern crate tokio_service;
 use tokio_proto::Message;
 use tokio_proto::multiplex::{self as proto, RequestId};
 use tokio_core::reactor::{Core};
-use self::tokio_service::{Service, simple_service};
+use self::tokio_service::{Service};
 
 use support::mock;
+use support::service::simple_service;
 
 use futures::{Future, oneshot};
+use futures::future::lazy;
 use futures::stream::Stream;
 use std::{io, thread};
-use std::sync::{mpsc};
+use std::sync::mpsc;
 
 /// Message head
 pub type Head = &'static str;
@@ -144,7 +146,10 @@ pub fn client<F>(f: F) where F: FnOnce(TransportHandle, Client) {
 
     let (mock, service) = rx2.recv().unwrap();
 
-    f(mock, service);
+    lazy(move || {
+        f(mock, service);
+        Ok::<(), ()>(())
+    }).wait().unwrap();
 
     tx.complete(());
     t.join().unwrap().unwrap();

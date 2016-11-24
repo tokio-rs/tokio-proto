@@ -2,6 +2,7 @@
 
 pub mod mock;
 pub mod multiplex;
+pub mod service;
 
 use std::time::Duration;
 

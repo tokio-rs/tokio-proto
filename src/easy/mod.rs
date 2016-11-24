@@ -23,7 +23,7 @@
 use std::io;
 
 use futures::stream::Receiver;
-use futures::{Async, Future, Poll};
+use futures::{Future, Poll};
 use tokio_service::Service;
 
 use {Message, Body};

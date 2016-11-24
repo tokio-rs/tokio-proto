@@ -1,6 +1,7 @@
 //! A collection of components for rapid protocol development
 
 #![deny(warnings, missing_docs)]
+#![allow(deprecated)] // TODO remove this
 
 extern crate bytes;
 extern crate slab;

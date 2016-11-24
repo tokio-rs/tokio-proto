@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
@@ -11,6 +13,7 @@ extern crate env_logger;
 mod support;
 
 use support::multiplex as mux;
+use support::service::simple_service;
 
 use futures::{Future, finished, oneshot};
 use futures::stream::{self, Stream};
@@ -25,7 +28,7 @@ use std::time::Duration;
 
 #[test]
 fn test_immediate_done() {
-    let service = tokio_service::simple_service(|_| {
+    let service = simple_service(|_| {
         finished(Message::WithoutBody("goodbye"))
     });
 
@@ -37,7 +40,7 @@ fn test_immediate_done() {
 
 #[test]
 fn test_immediate_writable_echo() {
-    let service = tokio_service::simple_service(|req| {
+    let service = simple_service(|req| {
         assert_eq!(req, "hello");
         finished(Message::WithoutBody("goodbye"))
     });
@@ -60,7 +63,7 @@ fn test_immediate_writable_delayed_response_echo() {
     let (c, fut) = oneshot();
     let fut = Mutex::new(Some(fut));
 
-    let service = tokio_service::simple_service(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "hello");
         fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
@@ -83,7 +86,7 @@ fn test_immediate_writable_delayed_response_echo() {
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
-    let service = tokio_service::simple_service(|req| {
+    let service = simple_service(|req| {
         assert_eq!(req, "hello");
         finished(Message::WithoutBody("goodbye"))
     });
@@ -106,7 +109,7 @@ fn test_same_order_multiplexing() {
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
 
-    let service = tokio_service::simple_service(move |_| {
+    let service = simple_service(move |_| {
         let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
         fut.then(|r| r.unwrap())
@@ -154,7 +157,7 @@ fn test_out_of_order_multiplexing() {
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
 
-    let service = tokio_service::simple_service(move |_| {
+    let service = simple_service(move |_| {
         let (c, fut) = oneshot();
         tx.lock().unwrap().send(c).unwrap();
         fut.then(|r| r.unwrap())
@@ -200,7 +203,7 @@ fn test_multiplexing_while_transport_not_writable() {
     let (tx, rx) = mpsc::channel();
     let tx = Mutex::new(tx);
 
-    let service = tokio_service::simple_service(move |req: Message<mux::Head, mux::Body>| {
+    let service = simple_service(move |req: Message<mux::Head, mux::Body>| {
         tx.lock().unwrap().send(req.clone()).unwrap();
         finished(Message::WithoutBody(*req.get_ref()))
     });
@@ -230,7 +233,7 @@ fn test_multiplexing_while_transport_not_writable() {
 
 #[test]
 fn test_repeatedly_flushes_messages() {
-    let service = tokio_service::simple_service(move |_| {
+    let service = simple_service(move |_| {
         finished(Message::WithoutBody("goodbye"))
     });
 
@@ -258,7 +261,7 @@ fn test_reaching_max_in_flight_requests() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = c1.clone();
 
-    let service = tokio_service::simple_service(move |_| {
+    let service = simple_service(move |_| {
         c2.fetch_add(1, Ordering::SeqCst);
         let fut = rx.lock().unwrap().recv().unwrap();
         fut.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
@@ -325,7 +328,7 @@ fn test_basic_streaming_response_body() {
     let (tx, rx) = stream::channel::<u32, io::Error>();
     let rx = Mutex::new(Some(rx));
 
-    let service = tokio_service::simple_service(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "want-body");
 
         let body = rx.lock().unwrap().take().unwrap();
@@ -377,7 +380,7 @@ fn test_basic_streaming_request_body_read_then_respond() {
     let (tx, rx) = mpsc::channel();
     let tx = Arc::new(Mutex::new(tx));
 
-    let service = tokio_service::simple_service(move |mut req: Message<mux::Head, mux::Body>| {
+    let service = simple_service(move |mut req: Message<mux::Head, mux::Body>| {
         assert_eq!(req, "have-body");
 
         let body = req.take_body().unwrap();
@@ -425,7 +428,7 @@ fn test_interleaving_request_body_chunks() {
     let tx = Mutex::new(tx);
     let cnt = AtomicUsize::new(0);
 
-    let service = tokio_service::simple_service(move |mut req: Message<mux::Head, mux::Body>| {
+    let service = simple_service(move |mut req: Message<mux::Head, mux::Body>| {
         let body = req.take_body().unwrap();
         let tx = tx.lock().unwrap().clone();
         let i = cnt.fetch_add(1, Ordering::Relaxed);
@@ -505,7 +508,7 @@ fn test_reaching_max_buffered_frames() {
 
 #[test]
 fn test_read_error_as_first_frame() {
-    let service = tokio_service::simple_service(|_| {
+    let service = simple_service(|_| {
         // Makes the compiler happy
         if true {
             panic!("should not be called");
@@ -530,7 +533,7 @@ fn test_read_error_during_stream() {
 #[test]
 fn test_error_handling_before_message_dispatched() {
     /*
-    let service = tokio_service::simple_service(|_| {
+    let service = simple_service(|_| {
         unimplemented!();
     });
     */

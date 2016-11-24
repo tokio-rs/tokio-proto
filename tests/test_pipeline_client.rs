@@ -1,3 +1,5 @@
+#![allow(deprecated)]
+
 extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
@@ -11,6 +13,7 @@ extern crate env_logger;
 mod support;
 
 use futures::stream::{self};
+use futures::future::lazy;
 use futures::{Future, oneshot};
 use support::mock;
 use tokio_service::Service;
@@ -126,7 +129,10 @@ fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
 
     let (mock, service) = rx2.recv().unwrap();
 
-    f(mock, service);
+    lazy(move || {
+        f(mock, service);
+        Ok::<(), ()>(())
+    }).wait().unwrap();
 
     tx.complete(());
     t.join().unwrap().unwrap();
