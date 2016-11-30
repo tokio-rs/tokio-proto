@@ -54,7 +54,7 @@ fn test_immediate_writable_delayed_response_echo() {
     let (c, fut) = oneshot::channel();
     let fut = Mutex::new(Some(fut));
 
-    let service = FnService::new(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "hello");
         fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
     });
@@ -357,7 +357,7 @@ fn test_streaming_response_body() {
     let (tx, rx) = mpsc::channel::<io::Result<u32>>(0);
     let rx = RefCell::new(Some(rx));
 
-    let service = FnService::new(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "omg");
         let rx = rx.borrow_mut().take().unwrap();
         let rx = rx.then(|r| r.unwrap()).boxed();

@@ -38,7 +38,7 @@ fn test_immediate_done() {
 
 #[test]
 fn test_immediate_writable_echo() {
-    let service = FnService::new(|req| {
+    let service = simple_service(|req| {
         assert_eq!(req, "hello");
         future::ok(Message::WithoutBody("goodbye"))
     });
@@ -58,7 +58,7 @@ fn test_immediate_writable_delayed_response_echo() {
     let (c, fut) = oneshot::channel();
     let fut = RefCell::new(Some(fut));
 
-    let service = FnService::new(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "hello");
         fut.borrow_mut().take().unwrap().then(|r| r.unwrap())
     });
@@ -78,7 +78,7 @@ fn test_immediate_writable_delayed_response_echo() {
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
-    let service = FnService::new(|req| {
+    let service = simple_service(|req| {
         assert_eq!(req, "hello");
         future::ok(Message::WithoutBody("goodbye"))
     });
@@ -226,7 +226,7 @@ fn test_reaching_max_in_flight_requests() {
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = c1.clone();
 
-    let service = FnService::new(move |_| {
+    let service = simple_service(move |_| {
         c2.fetch_add(1, Ordering::SeqCst);
         let fut = rx.borrow_mut().next().unwrap().unwrap();
         let fut: oneshot::Receiver<_> = fut;
@@ -285,7 +285,7 @@ fn test_basic_streaming_response_body() {
     let (tx, rx) = mpsc::channel(1);
     let rx = RefCell::new(Some(rx));
 
-    let service = FnService::new(move |req| {
+    let service = simple_service(move |req| {
         assert_eq!(req, "want-body");
 
         let rx = rx.borrow_mut().take().unwrap();
@@ -437,7 +437,7 @@ fn test_reaching_max_buffered_frames() {
 
 #[test]
 fn test_read_error_as_first_frame() {
-    let service = FnService::new(|_| {
+    let service = simple_service(|_| {
         // Makes the compiler happy
         if true {
             panic!("should not be called");
@@ -461,7 +461,7 @@ fn test_read_error_during_stream() {
 #[test]
 fn test_error_handling_before_message_dispatched() {
     /*
-    let service = FnService::new(|_| {
+    let service = simple_service(|_| {
         unimplemented!();
     });
     */
