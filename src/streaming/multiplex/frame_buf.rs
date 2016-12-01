@@ -116,6 +116,10 @@ impl<T> FrameDeque<T> {
                 head.next = inner.free;
                 inner.free = ptr;
 
+                if val.is_none() {
+                    assert!(self.len() == 0);
+                }
+
                 val
             } else {
                 None

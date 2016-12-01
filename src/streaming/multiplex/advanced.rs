@@ -7,7 +7,7 @@
 
 use streaming::{Message, Body};
 use futures::sync::mpsc;
-use futures::{Future, Poll, Async, Stream, Sink, AsyncSink};
+use futures::{Future, Poll, Async, Stream, Sink, AsyncSink, StartSend};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io;
@@ -54,7 +54,7 @@ pub struct Multiplex<T> where T: Dispatch {
     blocked_on_flush: WriteState,
 
     // Glues the service with the pipeline task
-    dispatch: T,
+    dispatch: MyTransport<T>,
 
     // Tracks in-progress exchanges
     exchanges: HashMap<RequestId, Exchange<T>>,
@@ -70,6 +70,11 @@ pub struct Multiplex<T> where T: Dispatch {
 
     // Temporary storage for RequestIds...
     scratch: Vec<RequestId>,
+}
+
+struct MyTransport<T: Dispatch> {
+    inner: T,
+    in_body_next: Option<<T::Transport as Transport<T::Io>>::WriteFrame>,
 }
 
 /// Manages the state of a single in / out exchange
@@ -93,6 +98,7 @@ struct Exchange<T: Dispatch> {
 
     // Buffers outbound body chunks until the sender is ready
     out_deque: FrameDeque<Option<Result<T::BodyOut, T::Error>>>,
+    out_next: Option<Result<T::BodyOut, T::Error>>,
 
     // Tracks if the sender is ready. This value is computed on each tick when
     // the senders are flushed and before new frames are read.
@@ -190,7 +196,10 @@ impl<T> Multiplex<T> where T: Dispatch {
             made_progress: false,
             blocked_on_dispatch: false,
             blocked_on_flush: WriteState::NoWrite,
-            dispatch: dispatch,
+            dispatch: MyTransport {
+                inner: dispatch,
+                in_body_next: None,
+            },
             exchanges: HashMap::new(),
             is_flushed: true,
             dispatch_deque: VecDeque::new(),
@@ -206,7 +215,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
     /// Attempt to dispatch any outbound request messages
     fn flush_dispatch_deque(&mut self) -> io::Result<()> {
-        while self.dispatch.poll_ready().is_ready() {
+        while self.dispatch.inner.poll_ready().is_ready() {
             let id = match self.dispatch_deque.pop_front() {
                 Some(id) => id,
                 None => return Ok(()),
@@ -225,7 +234,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                     solo: exchange.responded,
                 };
 
-                try!(self.dispatch.dispatch(message));
+                try!(self.dispatch.inner.dispatch(message));
             }
         }
 
@@ -265,7 +274,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         while self.run {
             // TODO: Only read frames if there is available space in the frame
             // buffer
-            if let Async::Ready(frame) = try!(self.dispatch.transport().poll()) {
+            if let Async::Ready(frame) = try!(self.dispatch.inner.transport().poll()) {
                 try!(self.process_out_frame(frame));
             } else {
                 break;
@@ -330,7 +339,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 // readiness in this case. This is because the message is a
                 // response to a request initiated by the dispatch. It is
                 // assumed that dispatcher can always process responses.
-                try!(self.dispatch.dispatch(MultiplexMessage {
+                try!(self.dispatch.inner.dispatch(MultiplexMessage {
                     id: id,
                     message: Ok(message),
                     solo: solo,
@@ -348,7 +357,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 }
             }
             Entry::Vacant(e) => {
-                if self.dispatch.poll_ready().is_ready() {
+                if self.dispatch.inner.poll_ready().is_ready() {
                     trace!("   --> dispatch ready -- dispatching");
 
                     // Only should be here if there are no queued messages
@@ -370,7 +379,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                     }
 
                     // Dispatch the message
-                    try!(self.dispatch.dispatch(MultiplexMessage {
+                    try!(self.dispatch.inner.dispatch(MultiplexMessage {
                         id: id,
                         message: Ok(message),
                         solo: solo,
@@ -426,7 +435,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 // The downstream dispatch has not provided a response to the
                 // exchange, indicate that interest has been canceled.
                 if !exchange.responded {
-                    try!(self.dispatch.cancel(id));
+                    try!(self.dispatch.inner.cancel(id));
                 }
 
                 remove = exchange.is_complete();
@@ -434,7 +443,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 if !exchange.responded {
                     // A response has not been provided yet, send the error via
                     // the dispatch
-                    try!(self.dispatch.dispatch(MultiplexMessage::error(id, err)));
+                    try!(self.dispatch.inner.dispatch(MultiplexMessage::error(id, err)));
 
                     exchange.responded = true;
                 } else {
@@ -488,10 +497,10 @@ impl<T> Multiplex<T> where T: Dispatch {
     fn write_in_messages(&mut self) -> io::Result<()> {
         trace!("write in messages");
 
-        while try!(self.dispatch.transport().poll_complete()).is_ready() {
+        while try!(self.dispatch.poll_complete()).is_ready() {
             trace!("   --> polling for in frame");
 
-            match try!(self.dispatch.poll()) {
+            match try!(self.dispatch.inner.poll()) {
                 Async::Ready(Some(message)) => {
                     self.dispatch_made_progress();
 
@@ -550,7 +559,7 @@ impl<T> Multiplex<T> where T: Dispatch {
         };
 
         // Write the frame
-        try!(assert_send(self.dispatch.transport(), frame));
+        try!(assert_send(&mut self.dispatch, frame));
         self.blocked_on_flush.wrote_frame();
 
         match self.exchanges.entry(id) {
@@ -609,7 +618,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
             // Write the error frame
             let frame = Frame::Error { id: id, error: error };
-            try!(assert_send(self.dispatch.transport(), frame));
+            try!(assert_send(&mut self.dispatch, frame));
             self.blocked_on_flush.wrote_frame();
 
             e.remove();
@@ -631,7 +640,7 @@ impl<T> Multiplex<T> where T: Dispatch {
             trace!("   --> checking request {:?}", id);
 
             loop {
-                if !try!(self.dispatch.transport().poll_complete()).is_ready() {
+                if !try!(self.dispatch.poll_complete()).is_ready() {
                     trace!("   --> blocked on transport");
                     self.blocked_on_flush.transport_not_write_ready();
                     break 'outer;
@@ -642,14 +651,14 @@ impl<T> Multiplex<T> where T: Dispatch {
                         trace!("   --> got chunk");
 
                         let frame = Frame::Body { id: id, chunk: Some(chunk) };
-                        try!(assert_send(self.dispatch.transport(), frame));
+                        try!(assert_send(&mut self.dispatch, frame));
                         self.blocked_on_flush.wrote_frame();
                     }
                     Ok(Async::Ready(None)) => {
                         trace!("   --> end of stream");
 
                         let frame = Frame::Body { id: id, chunk: None };
-                        try!(assert_send(self.dispatch.transport(), frame));
+                        try!(assert_send(&mut self.dispatch, frame));
                         self.blocked_on_flush.wrote_frame();
 
                         // in_body is fully written.
@@ -661,7 +670,7 @@ impl<T> Multiplex<T> where T: Dispatch {
 
                         // Write the error frame
                         let frame = Frame::Error { id: id, error: error };
-                        try!(assert_send(self.dispatch.transport(), frame));
+                        try!(assert_send(&mut self.dispatch, frame));
                         self.blocked_on_flush.wrote_frame();
 
                         exchange.responded = true;
@@ -693,7 +702,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.is_flushed = try!(self.dispatch.transport().poll_complete()).is_ready();
+        self.is_flushed = try!(self.dispatch.poll_complete()).is_ready();
 
         if self.is_flushed && self.blocked_on_flush == WriteState::Blocked {
             self.made_progress = true;
@@ -793,6 +802,7 @@ impl<T: Dispatch> Exchange<T> {
             request: request,
             responded: false,
             out_body: None,
+            out_next: None,
             out_deque: deque,
             out_is_ready: true,
             in_body: None,
@@ -878,7 +888,8 @@ impl<T: Dispatch> Exchange<T> {
                         }
                         Ok(AsyncSink::NotReady(chunk)) => {
                             // The sender is not ready for another message
-                            self.out_deque.push(Some(chunk));
+                            assert!(self.out_next.is_none());
+                            self.out_next = Some(chunk);
                             self.out_is_ready = false;
                             return;
                         }
@@ -898,6 +909,7 @@ impl<T: Dispatch> Exchange<T> {
         }
 
         self.out_is_ready = false;
+        self.out_next = None;
         self.out_body = None;
     }
 
@@ -926,12 +938,17 @@ impl<T: Dispatch> Exchange<T> {
 
             loop {
                 // Pop a pending frame
-                let msg = match self.out_deque.pop() {
-                    Some(Some(msg)) => msg,
-                    Some(None) => break,
+                let msg = match self.out_next.take() {
+                    Some(msg) => msg,
                     None => {
-                        // No more frames to flush
-                        return Ok(());
+                        match self.out_deque.pop() {
+                            Some(Some(msg)) => msg,
+                            Some(None) => break,
+                            None => {
+                                // No more frames to flush
+                                return Ok(());
+                            }
+                        }
                     }
                 };
                 let done = msg.is_err();
@@ -940,7 +957,8 @@ impl<T: Dispatch> Exchange<T> {
                     Ok(AsyncSink::NotReady(msg)) => {
                         trace!("   --> not ready");
                         // Sender not ready
-                        self.out_deque.push(Some(msg));
+                        assert!(self.out_next.is_none());
+                        self.out_next = Some(msg);
                         self.out_is_ready = false;
                         return Ok(());
                     }
@@ -993,8 +1011,8 @@ impl WriteState {
     }
 }
 
-fn assert_send<A, T>(s: &mut T, item: T::WriteFrame) -> Result<(), io::Error>
-    where T: Transport<A>
+fn assert_send<T>(s: &mut T, item: T::SinkItem) -> Result<(), T::SinkError>
+    where T: Sink
 {
     match try!(s.start_send(item)) {
         AsyncSink::Ready => Ok(()),
@@ -1028,5 +1046,38 @@ impl<T, B, E> MultiplexMessage<T, B, E> {
             message: Err(error),
             solo: false,
         }
+    }
+}
+
+impl<T: Dispatch> Sink for MyTransport<T> {
+    type SinkItem = <T::Transport as Transport<T::Io>>::WriteFrame;
+    type SinkError = io::Error;
+
+    fn start_send(&mut self, item: Self::SinkItem)
+                  -> StartSend<Self::SinkItem, Self::SinkError>
+    {
+        if self.in_body_next.is_some() {
+            match try!(self.poll_complete()) {
+                Async::Ready(()) => {}
+                Async::NotReady => return Ok(AsyncSink::NotReady(item))
+            }
+        }
+        assert!(self.in_body_next.is_none());
+        self.in_body_next = Some(item);
+        Ok(AsyncSink::Ready)
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        if let Some(next) = self.in_body_next.take() {
+            match try!(self.inner.transport().start_send(next)) {
+                AsyncSink::Ready => {}
+                AsyncSink::NotReady(item) => {
+                    self.in_body_next = Some(item);
+                    return Ok(Async::NotReady)
+                }
+            }
+        }
+
+        self.inner.transport().poll_complete()
     }
 }

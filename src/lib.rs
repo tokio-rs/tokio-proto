@@ -66,21 +66,27 @@
 //! - Implementing a service `Doubler` for doubling integers.
 //! - Spinning up this service on a local port (in `main`).
 //!
-//! ```
+//! ```no_run
+//! extern crate futures;
+//! extern crate tokio_core;
+//! extern crate tokio_proto;
+//! extern crate tokio_service;
+//!
 //! use std::str;
 //! use std::io::{self, ErrorKind, Write};
-//! use tokio_service::Service;
-//! use tokio_core::io::{Io, Codec, EasyBuf};
-//! use futures::{future, Future, BoxFuture};
 //!
+//! use futures::{future, Future, BoxFuture};
+//! use tokio_core::io::{Io, Codec, EasyBuf};
 //! use tokio_proto::Server;
 //! use tokio_proto::pipeline::ServerProto;
 //! use tokio_proto::transport::CodecTransport;
+//! use tokio_service::Service;
 //!
 //! // First, we implement a *codec*, which provides a way of encoding and
 //! // decoding messages for the protocol. See the documentation for `Codec` in
 //! // `tokio-core` for more details on how that works.
 //!
+//! #[derive(Default)]
 //! pub struct IntCodec;
 //!
 //! fn parse_u64(from: &[u8]) -> Result<u64, io::Error> {
@@ -118,8 +124,9 @@
 //!         Ok(parse_u64(buf.drain_to(amt).as_slice())?)
 //!     }
 //!
-//!     fn encode(&mut self, item: u64, into: &mut Vec<u8>) {
+//!     fn encode(&mut self, item: u64, into: &mut Vec<u8>) -> io::Result<()> {
 //!         writeln!(into, "{}", item);
+//!         Ok(())
 //!     }
 //! }
 //!
@@ -127,7 +134,7 @@
 //!
 //! pub struct IntProto;
 //!
-//! impl<T: 'static> ServerProto<T> for IntProto {
+//! impl<T: Io + 'static> ServerProto<T> for IntProto {
 //!     type Request = u64;
 //!     type Response = u64;
 //!     type Error = io::Error;

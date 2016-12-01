@@ -9,7 +9,10 @@
 //! `tokio-core`), which is a simple way to build a transport.
 
 use std::io;
-use futures::{Future, Poll, StartSend};
+
+use futures::{Future, Poll, StartSend, Stream, Sink};
+use futures::future;
+use tokio_core::io::{Io, Codec};
 
 /// A transport provides a way of reading and writing frames from an underlying
 /// I/O object.
@@ -59,25 +62,25 @@ pub trait Transport<T>: 'static + Sized {
 
 pub use tokio_core::io::Framed as CodecTransport;
 
-/*
-impl<T, A> Transport<T> for A where
-    A: Stream<Error = io::Error>,
-    A: Sink<SinkError = io::Error>,
-    A: FutureFrom<T>,
+impl<I, C> Transport<I> for CodecTransport<I, C>
+    where I: Io + 'static,
+          C: Codec + Default + 'static,
 {
-    type ReadFrame = A::Item;
-    type WriteFrame = A::SinkItem;
-    type Bind = A::Future;
+    type ReadFrame = C::In;
+    type WriteFrame = C::Out;
+    type Bind = future::Ok<CodecTransport<I, C>, io::Error>;
 
-    fn bind(io: T) -> Self::Bind {
-        FutureFrom::future_from(io)
+    fn bind(io: I) -> Self::Bind {
+        future::ok(io.framed(C::default()))
+
     }
 
     fn poll(&mut self) -> Poll<Option<Self::ReadFrame>, io::Error> {
         Stream::poll(self)
     }
 
-    fn start_send(&mut self, frame: Self::WriteFrame) -> StartSend<Self::WriteFrame, io::Error> {
+    fn start_send(&mut self, frame: Self::WriteFrame)
+                  -> StartSend<Self::WriteFrame, io::Error> {
         Sink::start_send(self, frame)
     }
 
@@ -85,4 +88,3 @@ impl<T, A> Transport<T> for A where
         Sink::poll_complete(self)
     }
 }
-*/
