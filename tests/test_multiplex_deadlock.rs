@@ -85,7 +85,7 @@ fn test_write_requires_flush() {
     }
 
     // Define a simple service that just finishes immediately
-    let service = FnService::new(|_| {
+    let service = simple_service(|_| {
         let body = vec![0, 1, 2].into_iter().map(Ok);
         let body: mux::BodyBox = Box::new(stream::iter(body));
 

@@ -159,6 +159,7 @@
 //! ```
 
 #![deny(warnings, missing_docs)]
+#![allow(deprecated)] // TODO remove this
 
 extern crate net2;
 extern crate rand;
