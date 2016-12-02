@@ -3,7 +3,7 @@
 //! See the crate-level docs for an overview.
 
 use std::io;
-use transport::Transport;
+use futures::{Stream, Sink};
 
 mod frame;
 pub use self::frame::Frame;
@@ -25,7 +25,17 @@ pub struct StreamingPipeline<B>(B);
 /// Additional transport details relevant to streaming, pipelined protocols.
 ///
 /// All methods added in this trait have default implementations.
-pub trait StreamingTransport<T>: Transport<T> {
+pub trait Transport: 'static +
+    Stream<Error = io::Error> +
+    Sink<SinkError = io::Error>
+{
+    /// Allow the transport to do miscellaneous work (e.g., sending ping-pong
+    /// messages) that is not directly connected to sending or receiving frames.
+    ///
+    /// This method should be called every time the task using the transport is
+    /// executing.
+    fn tick(&mut self) {}
+
     /// Cancel interest in the current stream
     fn cancel(&mut self) -> io::Result<()> {
         Ok(())

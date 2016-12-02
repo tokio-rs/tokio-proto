@@ -1,14 +1,13 @@
 use BindServer;
 use futures::stream::Stream;
-use futures::{Future, Poll, Async};
+use futures::{Future, IntoFuture, Poll, Async};
 use std::collections::VecDeque;
 use std::io;
 use streaming::{Message, Body};
 use super::advanced::{Pipeline, PipelineMessage};
-use super::{Frame, StreamingTransport};
+use super::{Frame, Transport};
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
-use transport::Transport;
 
 // TODO:
 //
@@ -41,15 +40,17 @@ pub trait ServerProto<T: 'static>: 'static {
 
     /// The frame transport, which usually take `T` as a parameter.
     type Transport:
-        StreamingTransport<T,
-                           ReadFrame = Frame<Self::Request, Self::RequestBody, Self::Error>,
-                           WriteFrame = Frame<Self::Response, Self::ResponseBody, Self::Error>>;
+        Transport<Item = Frame<Self::Request, Self::RequestBody, Self::Error>,
+                  SinkItem = Frame<Self::Response, Self::ResponseBody, Self::Error>>;
+
+    /// A future for initializing a transport from an I/O object.
+    ///
+    /// In simple cases, `Result<Self::Transport, Self::Error>` often suffices.
+    type BindTransport: IntoFuture<Item = Self::Transport, Error = io::Error>;
 
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        <Self::Transport as Transport<T>>::bind(io)
-    }
+    fn bind_transport(&self, io: T) -> Self::BindTransport;
 }
 
 impl<P, T, B> BindServer<super::StreamingPipeline<B>, T> for P where
@@ -66,7 +67,7 @@ impl<P, T, B> BindServer<super::StreamingPipeline<B>, T> for P where
                          Response = Self::ServiceResponse,
                          Error = Self::ServiceError> + 'static
     {
-        let task = self.bind_transport(io).and_then(|transport| {
+        let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<S, T, P> = Dispatch {
                 service: service,
                 transport: transport,

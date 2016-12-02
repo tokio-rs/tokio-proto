@@ -9,8 +9,7 @@ use futures::sync::mpsc;
 use futures::{Future, Poll, Async, Stream, Sink, AsyncSink, StartSend};
 use std::io;
 use streaming::{Message, Body};
-use super::Frame;
-use transport::Transport;
+use super::{Frame, Transport};
 
 // TODO:
 //
@@ -26,7 +25,7 @@ pub struct Pipeline<T> where T: Dispatch {
     // Glues the service with the pipeline task
     dispatch: T,
 
-    in_body_next: Option<<T::Transport as Transport<T::Io>>::WriteFrame>,
+    in_body_next: Option<<T::Transport as Sink>::SinkItem>,
 
     // The `Sender` for the current request body stream
     out_body: Option<BodySender<T::BodyOut, T::Error>>,
@@ -65,9 +64,8 @@ pub trait Dispatch {
     type Stream: Stream<Item = Self::BodyIn, Error = Self::Error>;
 
     /// Transport type
-    type Transport: Transport<Self::Io,
-                              ReadFrame = Frame<Self::Out, Self::BodyOut, Self::Error>,
-                              WriteFrame = Frame<Self::In, Self::BodyIn, Self::Error>>;
+    type Transport: Transport<Item = Frame<Self::Out, Self::BodyOut, Self::Error>,
+                              SinkItem = Frame<Self::In, Self::BodyIn, Self::Error>>;
 
     /// Mutable reference to the transport
     fn transport(&mut self) -> &mut Self::Transport;
@@ -358,6 +356,7 @@ impl<T> Pipeline<T> where T: Dispatch {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.dispatch.transport().tick();
         self.is_flushed = try!(self.transport().poll_complete()).is_ready();
         Ok(())
     }
@@ -420,7 +419,7 @@ impl<T> Future for Pipeline<T> where T: Dispatch {
 }
 
 impl<'a, T: Dispatch> Sink for MyTransport<'a, T> {
-    type SinkItem = <T::Transport as Transport<T::Io>>::WriteFrame;
+    type SinkItem = <T::Transport as Sink>::SinkItem;
     type SinkError = io::Error;
 
     fn start_send(&mut self, item: Self::SinkItem)

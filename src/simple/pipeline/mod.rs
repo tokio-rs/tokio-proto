@@ -20,9 +20,8 @@ mod lift {
     use std::io;
     use std::marker::PhantomData;
 
-    use streaming::pipeline::{Frame, StreamingTransport};
-    use transport::Transport;
-    use futures::{Future, StartSend, Poll, Async, AsyncSink};
+    use streaming::pipeline::{Frame, Transport};
+    use futures::{Future, Stream, Sink, StartSend, Poll, Async, AsyncSink};
 
     // Lifts an implementation of RPC-style transport to streaming-style transport
     pub struct LiftTransport<T, E>(pub T, pub PhantomData<E>);
@@ -33,28 +32,24 @@ mod lift {
         marker: PhantomData<(A, E)>,
     }
 
-    impl<A: 'static, T: Transport<A>, E: 'static> Transport<A> for LiftTransport<T, E> {
-        type ReadFrame = Frame<T::ReadFrame, (), E>;
-        type WriteFrame = Frame<T::WriteFrame, (), E>;
-        type Bind = LiftBind<A, T::Bind, E>;
+    impl<E, T: Stream<Error = io::Error>> Stream for LiftTransport<T, E> {
+        type Item = Frame<T::Item, (), E>;
+        type Error = io::Error;
 
-        fn bind(io: A) -> LiftBind<A, T::Bind, E> {
-            LiftBind::lift(T::bind(io))
-        }
-
-        fn tick(&mut self) {
-            self.0.tick()
-        }
-
-        fn poll(&mut self) -> Poll<Option<Self::ReadFrame>, io::Error> {
+        fn poll(&mut self) -> Poll<Option<Self::Item>, io::Error> {
             let item = try_ready!(self.0.poll());
             Ok(item.map(|msg| {
                 Frame::Message { message: msg, body: false }
             }).into())
         }
+    }
 
-        fn start_send(&mut self, request: Self::WriteFrame)
-                      -> StartSend<Self::WriteFrame, io::Error> {
+    impl<E, T: Sink<SinkError = io::Error>> Sink for LiftTransport<T, E> {
+        type SinkItem = Frame<T::SinkItem, (), E>;
+        type SinkError = io::Error;
+
+        fn start_send(&mut self, request: Self::SinkItem)
+                      -> StartSend<Self::SinkItem, io::Error> {
             if let Frame::Message { message, body } = request {
                 if !body {
                     match try!(self.0.start_send(message)) {
@@ -74,7 +69,9 @@ mod lift {
         }
     }
 
-    impl<A: 'static, T: Transport<A>, E: 'static> StreamingTransport<A> for LiftTransport<T, E> {}
+    impl<T, E: 'static> Transport for LiftTransport<T, E>
+        where T: 'static + Stream<Error = io::Error> + Sink<SinkError = io::Error>
+    {}
 
     impl<A, F, E> LiftBind<A, F, E> {
         pub fn lift(f: F) -> LiftBind<A, F, E> {

@@ -9,7 +9,6 @@ use std::thread;
 use std::cell::RefCell;
 use std::io::{self, Read, Write};
 
-use self::futures::future;
 use self::futures::stream::Wait;
 use self::futures::sync::mpsc;
 use self::futures::sync::oneshot;
@@ -19,7 +18,6 @@ use self::tokio_core::reactor::Core;
 use self::tokio_proto::streaming::multiplex;
 use self::tokio_proto::streaming::pipeline;
 use self::tokio_proto::streaming::{Message, Body};
-use self::tokio_proto::transport::Transport;
 use self::tokio_proto::util::client_proxy::Response;
 use self::tokio_proto::{BindClient, BindServer};
 use self::tokio_service::Service;
@@ -37,10 +35,11 @@ impl<T, U, I> pipeline::ClientProto<I> for MockProtocol<pipeline::Frame<T, U, io
     type ResponseBody = U;
     type Error = io::Error;
     type Transport = MockTransport<pipeline::Frame<T, U, io::Error>>;
+    type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, _io: I)
-                      -> future::Ok<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
-        future::ok(self.0.borrow_mut().take().unwrap())
+                      -> Result<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
+        Ok(self.0.borrow_mut().take().unwrap())
     }
 }
 
@@ -55,10 +54,11 @@ impl<T, U, I> multiplex::ClientProto<I> for MockProtocol<multiplex::Frame<T, U, 
     type ResponseBody = U;
     type Error = io::Error;
     type Transport = MockTransport<multiplex::Frame<T, U, io::Error>>;
+    type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, _io: I)
-                      -> future::Ok<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
-        future::ok(self.0.borrow_mut().take().unwrap())
+                      -> Result<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
+        Ok(self.0.borrow_mut().take().unwrap())
     }
 }
 
@@ -73,10 +73,11 @@ impl<T, U, I> pipeline::ServerProto<I> for MockProtocol<pipeline::Frame<T, U, io
     type ResponseBody = U;
     type Error = io::Error;
     type Transport = MockTransport<pipeline::Frame<T, U, io::Error>>;
+    type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, _io: I)
-                      -> future::Ok<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
-        future::ok(self.0.borrow_mut().take().unwrap())
+                      -> Result<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
+        Ok(self.0.borrow_mut().take().unwrap())
     }
 }
 
@@ -91,10 +92,11 @@ impl<T, U, I> multiplex::ServerProto<I> for MockProtocol<multiplex::Frame<T, U, 
     type ResponseBody = U;
     type Error = io::Error;
     type Transport = MockTransport<multiplex::Frame<T, U, io::Error>>;
+    type BindTransport = Result<Self::Transport, io::Error>;
 
     fn bind_transport(&self, _io: I)
-                      -> future::Ok<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
-        future::ok(self.0.borrow_mut().take().unwrap())
+                      -> Result<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
+        Ok(self.0.borrow_mut().take().unwrap())
     }
 }
 
@@ -103,14 +105,9 @@ struct MockTransport<T> {
     rx: mpsc::UnboundedReceiver<io::Result<T>>,
 }
 
-impl<A, T: 'static> Transport<A> for MockTransport<T> {
-    type ReadFrame = T;
-    type WriteFrame = T;
-    type Bind = future::Ok<MockTransport<T>, io::Error>;
-
-    fn bind(_io: A) -> Self::Bind {
-        panic!()
-    }
+impl<T: 'static> Stream for MockTransport<T> {
+    type Item = T;
+    type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<T>, io::Error> {
         match self.rx.poll().expect("rx cannot fail") {
@@ -120,6 +117,11 @@ impl<A, T: 'static> Transport<A> for MockTransport<T> {
             Async::NotReady => Ok(Async::NotReady),
         }
     }
+}
+
+impl<T: 'static> Sink for MockTransport<T> {
+    type SinkItem = T;
+    type SinkError = io::Error;
 
     fn start_send(&mut self, item: T) -> StartSend<T, io::Error> {
         Ok(self.tx.start_send(item).expect("should not be closed"))
@@ -130,8 +132,8 @@ impl<A, T: 'static> Transport<A> for MockTransport<T> {
     }
 }
 
-impl<A, T: 'static> pipeline::StreamingTransport<A> for MockTransport<T> {}
-impl<A, B, T: 'static> multiplex::StreamingTransport<A, B> for MockTransport<T> {}
+impl<T: 'static> pipeline::Transport for MockTransport<T> {}
+impl<B, T: 'static> multiplex::Transport<B> for MockTransport<T> {}
 
 struct MockIo;
 

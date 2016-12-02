@@ -24,9 +24,8 @@ mod lift {
     use std::marker::PhantomData;
 
     use super::RequestId;
-    use streaming::multiplex::{Frame, StreamingTransport};
-    use transport::Transport;
-    use futures::{Future, StartSend, Poll, Async, AsyncSink};
+    use streaming::multiplex::{Frame, Transport};
+    use futures::{Future, Stream, Sink, StartSend, Poll, Async, AsyncSink};
 
     // Lifts an implementation of RPC-style transport to streaming-style transport
     pub struct LiftTransport<T, E>(pub T, pub PhantomData<E>);
@@ -37,26 +36,14 @@ mod lift {
         marker: PhantomData<(A, E)>,
     }
 
-    impl<A, T, ReadFrame, WriteFrame, E> Transport<A> for LiftTransport<T, E> where
-        A: 'static,
+    impl<T, InnerItem, E> Stream for LiftTransport<T, E> where
         E: 'static,
-        T: Transport<A,
-                     ReadFrame = (RequestId, ReadFrame),
-                     WriteFrame = (RequestId, WriteFrame)>
+        T: Stream<Item = (RequestId, InnerItem), Error = io::Error>,
     {
-        type ReadFrame = Frame<ReadFrame, (), E>;
-        type WriteFrame = Frame<WriteFrame, (), E>;
-        type Bind = LiftBind<A, T::Bind, E>;
+        type Item = Frame<InnerItem, (), E>;
+        type Error = io::Error;
 
-        fn bind(io: A) -> LiftBind<A, T::Bind, E> {
-            LiftBind::lift(T::bind(io))
-        }
-
-        fn tick(&mut self) {
-            self.0.tick()
-        }
-
-        fn poll(&mut self) -> Poll<Option<Self::ReadFrame>, io::Error> {
+        fn poll(&mut self) -> Poll<Option<Self::Item>, io::Error> {
             let (id, msg) = match try_ready!(self.0.poll()) {
                 Some(msg) => msg,
                 None => return Ok(None.into()),
@@ -68,9 +55,17 @@ mod lift {
                 id: id,
             }).into())
         }
+    }
 
-        fn start_send(&mut self, request: Self::WriteFrame)
-                      -> StartSend<Self::WriteFrame, io::Error> {
+    impl<T, InnerSink, E> Sink for LiftTransport<T, E> where
+        E: 'static,
+        T: Sink<SinkItem = (RequestId, InnerSink), SinkError = io::Error>
+    {
+        type SinkItem = Frame<InnerSink, (), E>;
+        type SinkError = io::Error;
+
+        fn start_send(&mut self, request: Self::SinkItem)
+                      -> StartSend<Self::SinkItem, io::Error> {
             if let Frame::Message { message, id, body, solo } = request {
                 if !body && !solo {
                     match try!(self.0.start_send((id, message))) {
@@ -95,12 +90,11 @@ mod lift {
         }
     }
 
-    impl<A, T, ReadFrame, WriteFrame, E> StreamingTransport<A, ()> for LiftTransport<T, E> where
-        A: 'static,
+    impl<T, InnerItem, InnerSink, E> Transport<()> for LiftTransport<T, E> where
         E: 'static,
-        T: Transport<A,
-                     ReadFrame = (RequestId, ReadFrame),
-                     WriteFrame = (RequestId, WriteFrame)>
+        T: 'static,
+        T: Stream<Item = (RequestId, InnerItem), Error = io::Error>,
+        T: Sink<SinkItem = (RequestId, InnerSink), SinkError = io::Error>
     {}
 
     impl<A, F, E> LiftBind<A, F, E> {

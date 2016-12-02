@@ -12,8 +12,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use super::frame_buf::{FrameBuf, FrameDeque};
-use super::{Frame, RequestId};
-use transport::Transport;
+use super::{Frame, RequestId, Transport};
 
 /*
  * TODO:
@@ -74,7 +73,7 @@ pub struct Multiplex<T> where T: Dispatch {
 
 struct MyTransport<T: Dispatch> {
     inner: T,
-    in_body_next: Option<<T::Transport as Transport<T::Io>>::WriteFrame>,
+    in_body_next: Option<<T::Transport as Sink>::SinkItem>,
 }
 
 /// Manages the state of a single in / out exchange
@@ -159,9 +158,9 @@ pub trait Dispatch {
     type Stream: Stream<Item = Self::BodyIn, Error = Self::Error>;
 
     /// Transport type
-    type Transport: Transport<Self::Io,
-                              ReadFrame = Frame<Self::Out, Self::BodyOut, Self::Error>,
-                              WriteFrame = Frame<Self::In, Self::BodyIn, Self::Error>>;
+    type Transport: Transport<Self::BodyOut,
+                              Item = Frame<Self::Out, Self::BodyOut, Self::Error>,
+                              SinkItem = Frame<Self::In, Self::BodyIn, Self::Error>>;
 
     /// Mutable reference to the transport
     fn transport(&mut self) -> &mut Self::Transport;
@@ -702,6 +701,7 @@ impl<T> Multiplex<T> where T: Dispatch {
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        self.dispatch.inner.transport().tick();
         self.is_flushed = try!(self.dispatch.poll_complete()).is_ready();
 
         if self.is_flushed && self.blocked_on_flush == WriteState::Blocked {
@@ -1050,7 +1050,7 @@ impl<T, B, E> MultiplexMessage<T, B, E> {
 }
 
 impl<T: Dispatch> Sink for MyTransport<T> {
-    type SinkItem = <T::Transport as Transport<T::Io>>::WriteFrame;
+    type SinkItem = <T::Transport as Sink>::SinkItem;
     type SinkError = io::Error;
 
     fn start_send(&mut self, item: Self::SinkItem)

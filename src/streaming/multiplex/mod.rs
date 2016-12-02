@@ -3,8 +3,7 @@
 //! See the crate-level docs for an overview.
 
 use std::io;
-use transport::Transport;
-use futures::Async;
+use futures::{Stream, Sink, Async};
 
 mod frame_buf;
 
@@ -31,7 +30,17 @@ pub struct StreamingMultiplex<B>(B);
 /// Additional transport details relevant to streaming, multiplexed protocols.
 ///
 /// All methods added in this trait have default implementations.
-pub trait StreamingTransport<T, ReadBody>: Transport<T> {
+pub trait Transport<ReadBody>: 'static +
+    Stream<Error = io::Error> +
+    Sink<SinkError = io::Error>
+{
+    /// Allow the transport to do miscellaneous work (e.g., sending ping-pong
+    /// messages) that is not directly connected to sending or receiving frames.
+    ///
+    /// This method should be called every time the task using the transport is
+    /// executing.
+    fn tick(&mut self) {}
+
     /// Cancel interest in the exchange identified by RequestId
     fn cancel(&mut self, request_id: RequestId) -> io::Result<()> {
         drop(request_id);

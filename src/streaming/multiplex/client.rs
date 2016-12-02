@@ -1,11 +1,10 @@
-use super::{Frame, RequestId, StreamingMultiplex, StreamingTransport};
+use super::{Frame, RequestId, StreamingMultiplex, Transport};
 use super::advanced::{Multiplex, MultiplexMessage};
 
 use BindClient;
 use streaming::{Body, Message};
-use transport::Transport;
 use util::client_proxy::{self, ClientProxy, Receiver};
-use futures::{Future, Complete, Poll, Async};
+use futures::{Future, IntoFuture, Complete, Poll, Async};
 use futures::stream::Stream;
 use tokio_core::reactor::Handle;
 use std::io;
@@ -37,15 +36,18 @@ pub trait ClientProto<T: 'static>: 'static {
 
     /// The frame transport, which usually take `T` as a parameter.
     type Transport:
-        StreamingTransport<T, Self::ResponseBody,
-                           ReadFrame = Frame<Self::Response, Self::ResponseBody, Self::Error>,
-                           WriteFrame = Frame<Self::Request, Self::RequestBody, Self::Error>>;
+        Transport<Self::ResponseBody,
+                  Item = Frame<Self::Response, Self::ResponseBody, Self::Error>,
+                  SinkItem = Frame<Self::Request, Self::RequestBody, Self::Error>>;
+
+    /// A future for initializing a transport from an I/O object.
+    ///
+    /// In simple cases, `Result<Self::Transport, Self::Error>` often suffices.
+    type BindTransport: IntoFuture<Item = Self::Transport, Error = io::Error>;
 
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        <Self::Transport as Transport<T>>::bind(io)
-    }
+    fn bind_transport(&self, io: T) -> Self::BindTransport;
 }
 
 impl<P, T, B> BindClient<StreamingMultiplex<B>, T> for P where
@@ -62,7 +64,7 @@ impl<P, T, B> BindClient<StreamingMultiplex<B>, T> for P where
     fn bind_client(&self, handle: &Handle, io: T) -> Self::BindClient {
         let (client, rx) = client_proxy::pair();
 
-        let task = self.bind_transport(io).and_then(|transport| {
+        let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<P, T, B> = Dispatch {
                 transport: transport,
                 requests: rx,

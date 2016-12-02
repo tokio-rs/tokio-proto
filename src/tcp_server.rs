@@ -19,7 +19,7 @@ use tokio_service::NewService;
 // - max idle time
 // - max lifetime
 
-/// A builder for servers.
+/// A builder for TCP servers.
 ///
 /// Setting up a server needs, at minimum:
 ///
@@ -31,14 +31,14 @@ use tokio_service::NewService;
 /// configuration, which is expected to grow over time.
 ///
 /// See the crate docs for an example.
-pub struct Server<Kind, P> {
+pub struct TcpServer<Kind, P> {
     _kind: PhantomData<Kind>,
     proto: Arc<P>,
     threads: usize,
     addr: SocketAddr,
 }
 
-impl<Kind, P> Server<Kind, P> where
+impl<Kind, P> TcpServer<Kind, P> where
     P: BindServer<Kind, TcpStream> + Send + Sync + 'static
 {
     /// Starts building a server for the given protocol and address, with
@@ -54,8 +54,8 @@ impl<Kind, P> Server<Kind, P> where
     /// - `streaming::multiplex::Server`
     ///
     /// See the crate documentation for more details on those traits.
-    pub fn new(protocol: P, addr: SocketAddr) -> Server<Kind, P> {
-        Server {
+    pub fn new(protocol: P, addr: SocketAddr) -> TcpServer<Kind, P> {
+        TcpServer {
             _kind: PhantomData,
             proto: Arc::new(protocol),
             threads: 1,

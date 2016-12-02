@@ -1,13 +1,12 @@
-use super::{Frame, RequestId, StreamingTransport};
+use super::{Frame, RequestId, Transport};
 use super::advanced::{Multiplex, MultiplexMessage};
 
 use BindServer;
-use transport::Transport;
 use streaming::{Message, Body};
 use tokio_service::Service;
 use tokio_core::reactor::Handle;
 use futures::{Future, Poll, Async};
-use futures::stream::Stream;
+use futures::{IntoFuture, Stream};
 use std::io;
 
 /// A streaming, multiplexed server protocol.
@@ -54,15 +53,18 @@ pub trait ServerProto<T: 'static>: 'static {
 
     /// The frame transport, which usually take `T` as a parameter.
     type Transport:
-        StreamingTransport<T, Self::RequestBody,
-                           ReadFrame = Frame<Self::Request, Self::RequestBody, Self::Error>,
-                           WriteFrame = Frame<Self::Response, Self::ResponseBody, Self::Error>>;
+        Transport<Self::RequestBody,
+                  Item = Frame<Self::Request, Self::RequestBody, Self::Error>,
+                  SinkItem = Frame<Self::Response, Self::ResponseBody, Self::Error>>;
+
+    /// A future for initializing a transport from an I/O object.
+    ///
+    /// In simple cases, `Result<Self::Transport, Self::Error>` often suffices.
+    type BindTransport: IntoFuture<Item = Self::Transport, Error = io::Error>;
 
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        <Self::Transport as Transport<T>>::bind(io)
-    }
+    fn bind_transport(&self, io: T) -> Self::BindTransport;
 }
 
 impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
@@ -79,7 +81,7 @@ impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
                          Response = Self::ServiceResponse,
                          Error = Self::ServiceError> + 'static
     {
-        let task = self.bind_transport(io).and_then(|transport| {
+        let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<S, T, P> = Dispatch {
                 service: service,
                 transport: transport,

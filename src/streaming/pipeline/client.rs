@@ -1,11 +1,10 @@
 use BindClient;
 use streaming::{Body, Message};
-use transport::Transport;
-use super::{StreamingPipeline, Frame, StreamingTransport};
+use super::{StreamingPipeline, Frame, Transport};
 use super::advanced::{Pipeline, PipelineMessage};
 use util::client_proxy::{self, ClientProxy, Receiver};
 use futures::stream::Stream;
-use futures::{Future, Complete, Poll, Async};
+use futures::{Future, IntoFuture, Complete, Poll, Async};
 use tokio_core::reactor::Handle;
 use std::collections::VecDeque;
 use std::io;
@@ -36,15 +35,17 @@ pub trait ClientProto<T: 'static>: 'static {
 
     /// The frame transport, which usually take `T` as a parameter.
     type Transport:
-        StreamingTransport<T,
-                           ReadFrame = Frame<Self::Response, Self::ResponseBody, Self::Error>,
-                           WriteFrame = Frame<Self::Request, Self::RequestBody, Self::Error>>;
+        Transport<Item = Frame<Self::Response, Self::ResponseBody, Self::Error>,
+                  SinkItem = Frame<Self::Request, Self::RequestBody, Self::Error>>;
+
+    /// A future for initializing a transport from an I/O object.
+    ///
+    /// In simple cases, `Result<Self::Transport, Self::Error>` often suffices.
+    type BindTransport: IntoFuture<Item = Self::Transport, Error = io::Error>;
 
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        <Self::Transport as Transport<T>>::bind(io)
-    }
+    fn bind_transport(&self, io: T) -> Self::BindTransport;
 }
 
 impl<P, T, B> BindClient<StreamingPipeline<B>, T> for P where
@@ -61,7 +62,7 @@ impl<P, T, B> BindClient<StreamingPipeline<B>, T> for P where
     fn bind_client(&self, handle: &Handle, io: T) -> Self::BindClient {
         let (client, rx) = client_proxy::pair();
 
-        let task = self.bind_transport(io).and_then(|transport| {
+        let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<P, T, B> = Dispatch {
                 transport: transport,
                 requests: rx,

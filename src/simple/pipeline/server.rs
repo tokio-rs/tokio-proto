@@ -10,8 +10,7 @@ use streaming::{self, Message};
 use streaming::pipeline::StreamingPipeline;
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
-use transport::Transport;
-use futures::{stream, Future, Poll};
+use futures::{stream, Stream, Sink, Future, IntoFuture, Poll};
 
 type MyStream<E> = stream::Empty<(), E>;
 
@@ -33,14 +32,27 @@ pub trait ServerProto<T: 'static>: 'static {
     /// Errors produced by the service.
     type Error: From<io::Error> + 'static;
 
-    /// The message transport, which works with I/O objects of type `T`
-    type Transport: Transport<T, ReadFrame = Self::Request, WriteFrame = Self::Response>;
+    /// The message transport, which works with I/O objects of type `T`.
+    ///
+    /// An easy way to build a transport is to use `tokio_core::io::Framed`
+    /// together with a `Codec`; in that case, the transport type is
+    /// `Framed<T, YourCodec>`. See the crate docs for an example.
+    type Transport: 'static +
+        Stream<Item = Self::Request, Error = io::Error> +
+        Sink<SinkItem = Self::Response, SinkError = io::Error>;
+
+    /// A future for initializing a transport from an I/O object.
+    ///
+    /// In simple cases, `Result<Self::Transport, Self::Error>` often suffices.
+    type BindTransport: IntoFuture<Item = Self::Transport, Error = io::Error>;
 
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        <Self::Transport as Transport<T>>::bind(io)
-    }
+    ///
+    /// An easy way to build a transport is to use `tokio_core::io::Framed`
+    /// together with a `Codec`; in that case, `bind_transport` is just
+    /// `io.framed(YourCodec)`. See the crate docs for an example.
+    fn bind_transport(&self, io: T) -> Self::BindTransport;
 }
 
 impl<T: 'static, P: ServerProto<T>> BindServer<Pipeline, T> for P {
@@ -71,9 +83,10 @@ impl<T, P> streaming::pipeline::ServerProto<T> for LiftProto<P> where
     type Error = P::Error;
 
     type Transport = LiftTransport<P::Transport, P::Error>;
+    type BindTransport = LiftBind<T, <P::BindTransport as IntoFuture>::Future, P::Error>;
 
-    fn bind_transport(&self, io: T) -> <Self::Transport as Transport<T>>::Bind {
-        LiftBind::lift(ServerProto::bind_transport(self.lower(), io))
+    fn bind_transport(&self, io: T) -> Self::BindTransport {
+        LiftBind::lift(ServerProto::bind_transport(self.lower(), io).into_future())
     }
 }
 

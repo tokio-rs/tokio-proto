@@ -76,10 +76,9 @@
 //! use std::io::{self, ErrorKind, Write};
 //!
 //! use futures::{future, Future, BoxFuture};
-//! use tokio_core::io::{Io, Codec, EasyBuf};
-//! use tokio_proto::Server;
+//! use tokio_core::io::{Io, Codec, Framed, EasyBuf};
+//! use tokio_proto::TcpServer;
 //! use tokio_proto::pipeline::ServerProto;
-//! use tokio_proto::transport::CodecTransport;
 //! use tokio_service::Service;
 //!
 //! // First, we implement a *codec*, which provides a way of encoding and
@@ -138,7 +137,12 @@
 //!     type Request = u64;
 //!     type Response = u64;
 //!     type Error = io::Error;
-//!     type Transport = CodecTransport<T, IntCodec>;
+//!     type Transport = Framed<T, IntCodec>;
+//!     type BindTransport = Result<Self::Transport, io::Error>;
+//!
+//!     fn bind_transport(&self, io: T) -> Self::BindTransport {
+//!         Ok(io.framed(IntCodec))
+//!     }
 //! }
 //!
 //! // Now we implement a service we'd like to run on top of this protocol
@@ -160,7 +164,7 @@
 //! // Finally, we can actually host this service locally!
 //! fn main() {
 //!     let addr = "0.0.0.0:12345".parse().unwrap();
-//!     Server::new(IntProto, addr)
+//!     TcpServer::new(IntProto, addr)
 //!         .serve(|| Ok(Doubler));
 //! }
 //! ```
@@ -186,14 +190,13 @@ mod simple;
 pub use simple::{pipeline, multiplex};
 
 pub mod streaming;
-pub mod transport;
 pub mod util;
 
-mod client;
-pub use client::Client;
+mod tcp_client;
+pub use tcp_client::TcpClient;
 
-mod server;
-pub use server::Server;
+mod tcp_server;
+pub use tcp_server::TcpServer;
 
 use tokio_core::reactor::Handle;
 use tokio_service::Service;

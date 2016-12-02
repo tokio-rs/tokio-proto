@@ -23,7 +23,7 @@ use futures::{Future, Poll, Async};
 ///
 /// At the moment, this builder offers minimal configuration, but more will be
 /// added over time.
-pub struct Client<Kind, P> {
+pub struct TcpClient<Kind, P> {
     _kind: PhantomData<Kind>,
     proto: Arc<P>,
 }
@@ -48,13 +48,13 @@ impl<Kind, P> Future for Connect<Kind, P> where P: BindClient<Kind, TcpStream> {
     }
 }
 
-impl<Kind, P> Client<Kind, P> where P: BindClient<Kind, TcpStream> {
+impl<Kind, P> TcpClient<Kind, P> where P: BindClient<Kind, TcpStream> {
     /// Create a builder for the given client protocol.
     ///
     /// To connect to a service, you need a *client protocol* implementation;
     /// see the crate documentation for guidance.
-    pub fn new(protocol: P) -> Client<Kind, P> {
-        Client {
+    pub fn new(protocol: P) -> TcpClient<Kind, P> {
+        TcpClient {
             _kind: PhantomData,
             proto: Arc::new(protocol)
         }
