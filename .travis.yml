@@ -1,12 +1,18 @@
 language: rust
 rust:
-  - nightly
   - stable
-  - 1.10.0
+  - beta
+  - nightly
 
 os:
   - linux
   - osx
+
+matrix:
+  include:
+    # Minimum version supported
+    - rust: 1.10.0
+      script: cargo build
 
 matrix:
   allow_failures:
