@@ -1,45 +1,33 @@
+extern crate futures;
 extern crate tokio_service;
 
+use std::io;
+
+use self::futures::{Future, IntoFuture};
 use self::tokio_service::Service;
-use futures::{Future, IntoFuture};
-use std::marker::PhantomData;
-use std::sync::Arc;
+
+pub struct SimpleService<T, U> {
+    inner: Box<Fn(T) -> Box<Future<Item=U, Error=io::Error> + Send> + Send>,
+}
 
 /// Returns a `Service` backed by the given closure.
-pub fn simple_service<F, R>(f: F) -> SimpleService<F, R> {
-    SimpleService::new(f)
-}
-
-pub struct SimpleService<F, R> {
-    f: Arc<F>,
-    _ty: PhantomData<fn() -> R>, // don't impose Sync on R
-}
-
-
-impl<F, R> SimpleService<F, R> {
-    /// Create and return a new `SimpleService` backed by the given function.
-    pub fn new(f: F) -> SimpleService<F, R> {
-        SimpleService {
-            f: Arc::new(f),
-            _ty: PhantomData,
-        }
+pub fn simple_service<F, R, T, U>(f: F) -> SimpleService<T, U>
+    where F: Fn(T) -> R + Send + 'static,
+          R: IntoFuture<Item=U, Error=io::Error>,
+          R::Future: Send + 'static,
+{
+    SimpleService {
+        inner: Box::new(move |t| Box::new(f(t).into_future())),
     }
 }
 
-impl<F, R, S> Service for SimpleService<F, R>
-    where F: Fn(R) -> S + Sync + Send + 'static,
-          R: Send + 'static,
-          S: IntoFuture + Send + 'static,
-          S::Future: Send + 'static,
-          <S::Future as Future>::Item: Send + 'static,
-          <S::Future as Future>::Error: Send + 'static,
-{
-    type Request = R;
-    type Response = S::Item;
-    type Error = S::Error;
-    type Future = S::Future;
+impl<T, U> Service for SimpleService<T, U> {
+    type Request = T;
+    type Response = U;
+    type Future = Box<Future<Item=U, Error=io::Error> + Send>;
+    type Error = io::Error;
 
-    fn call(&self, req: R) -> Self::Future {
-        (self.f)(req).into_future()
+    fn call(&self, t: T) -> Self::Future {
+        (self.inner)(t)
     }
 }

@@ -11,79 +11,68 @@
 // that seems to be fixed on nightly.
 #![allow(warnings)]
 
-use {Error, Message};
-use sender::Sender;
+use streaming::Message;
 use tokio_service::Service;
-use futures::stream::{self, Stream};
-use futures::{self, Future, Oneshot, Complete, Async, Poll};
+use futures::{Future, Async, Poll, Stream, AsyncSink, Sink};
+use futures::sync::mpsc;
+use futures::sync::oneshot;
 use std::io;
 use std::cell::RefCell;
 
 /// Client `Service` for pipeline or multiplex protocols
-pub struct Client<R1, R2, B1, B2, E>
-    where B1: Stream<Error = E>,
-          E: From<Error<E>>,
-{
-    tx: RefCell<Sender<Envelope<R1, R2, B1, B2, E>, io::Error>>,
+pub struct ClientProxy<R, S, E> {
+    tx: RefCell<mpsc::UnboundedSender<io::Result<Envelope<R, S, E>>>>,
 }
 
 /// Response future returned from a client
 pub struct Response<T, E> {
-    inner: Oneshot<Result<T, E>>,
+    inner: oneshot::Receiver<Result<T, E>>,
 }
 
 /// Message used to dispatch requests to the task managing the client
 /// connection.
-type Envelope<R1, R2, B1, B2, E> =
-    (Message<R1, B1>, Complete<Result<Message<R2, B2>, E>>);
+type Envelope<R, S, E> = (R, oneshot::Sender<Result<S, E>>);
 
 /// A client / receiver pair
-pub type Pair<R1, R2, B1, B2, E> =
-    (Client<R1, R2, B1, B2, E>, Receiver<R1, R2, B1, B2, E>);
+pub type Pair<R, S, E> = (ClientProxy<R, S, E>, Receiver<R, S, E>);
 
 /// Receive requests submitted to the client
-pub type Receiver<R1, R2, B1, B2, E> =
-    stream::Receiver<Envelope<R1, R2, B1, B2, E>, io::Error>;
+pub type Receiver<R, S, E> = mpsc::UnboundedReceiver<io::Result<Envelope<R, S, E>>>;
 
 /// Return a client handle and a handle used to receive requests on
-pub fn pair<R1, R2, B1, B2, E>() -> Pair<R1, R2, B1, B2, E>
-    where B1: Stream<Error = E>,
-          E: From<Error<E>>,
-{
+pub fn pair<R, S, E>() -> Pair<R, S, E> {
     // Create a stream
-    let (tx, rx) = stream::channel();
+    let (tx, rx) = mpsc::unbounded();
 
     // Use the sender handle to create a `Client` handle
-    let client = Client { tx: RefCell::new(tx.into()) };
+    let client = ClientProxy { tx: RefCell::new(tx) };
 
     // Return the pair
     (client, rx)
 }
 
-impl<R1, R2, B1, B2, E> Service for Client<R1, R2, B1, B2, E>
-    where R1: 'static,
-          R2: 'static,
-          B1: Stream<Error = E> + 'static,
-          B2: 'static,
-          E: From<Error<E>> + 'static,
-{
-    type Request = Message<R1, B1>;
-    type Response = Message<R2, B2>;
+impl<R, S, E: From<io::Error>> Service for ClientProxy<R, S, E> {
+    type Request = R;
+    type Response = S;
     type Error = E;
-    type Future = Response<Self::Response, E>;
+    type Future = Response<S, E>;
 
-    fn call(&self, request: Self::Request) -> Self::Future {
-        let (tx, rx) = futures::oneshot();
+    fn call(&self, request: R) -> Self::Future {
+        let (tx, rx) = oneshot::channel();
 
         // TODO: handle error
-        self.tx.borrow_mut().send(Ok((request, tx)));
+        match mpsc::UnboundedSender::send(&mut self.tx.borrow_mut(),
+                                          Ok((request, tx))) {
+            Ok(()) => {}
+            Err(_) => panic!("receiving end of client is gone"),
+        }
 
         Response { inner: rx }
     }
 }
 
 impl<T, E> Future for Response<T, E>
-    where E: From<Error<E>>,
+    where E: From<io::Error>,
 {
     type Item = T;
     type Error = E;
@@ -94,7 +83,7 @@ impl<T, E> Future for Response<T, E>
             Ok(Async::Ready(Err(e))) => Err(e),
             Ok(Async::NotReady) => Ok(Async::NotReady),
             Err(_) => {
-                let e = Error::Io(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"));
+                let e = io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe");
                 Err(e.into())
             }
         }

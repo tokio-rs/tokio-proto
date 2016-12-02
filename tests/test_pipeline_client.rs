@@ -10,90 +10,68 @@ extern crate rand;
 extern crate log;
 extern crate env_logger;
 
-mod support;
-
-use futures::stream::{self};
-use futures::future::lazy;
-use futures::{Future, oneshot};
-use support::mock;
-use tokio_service::Service;
-use tokio_proto::{pipeline, Message};
-use tokio_core::reactor::Core;
 use std::io;
 use std::thread;
-use std::sync::mpsc;
+use std::time::Duration;
 
-// The message type is a static string for both the request and response
-type Msg = &'static str;
+use futures::sync::mpsc;
+use futures::{Future, Stream, Sink};
+use tokio_proto::streaming::Message;
+use tokio_proto::streaming::pipeline::Frame;
+use tokio_service::Service;
 
-// Transport handle
-type TransportHandle = mock::TransportHandle<Frame, Frame>;
-
-// Client handle
-type Client = tokio_proto::Client<Msg, Msg, Body, Body, io::Error>;
-
-// In frame
-type Frame = pipeline::Frame<Msg, u32, io::Error>;
-
-// Body stream
-type Body = tokio_proto::Body<u32, io::Error>;
+mod support;
+use support::mock;
 
 #[test]
 fn test_ping_pong_close() {
-    run(|mock, service| {
-        mock.allow_write();
+    let (mut mock, service, _other) = mock::pipeline_client();
 
-        let pong = service.call(Message::WithoutBody("ping"));
-        assert_eq!("ping", mock.next_write().unwrap_msg());
-
-        mock.send(msg("pong"));
-        assert_eq!("pong", pong.wait().unwrap().into_inner());
-
-        mock.send(pipeline::Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    let pong = service.call(Message::WithoutBody("ping"));
+    assert_eq!("ping", mock.next_write().unwrap_msg());
+    mock.send(msg("pong"));
+    assert_eq!("pong", pong.wait().unwrap().into_inner());
+    mock.allow_and_assert_drop();
 }
+
 
 #[test]
 #[ignore]
 fn test_response_ready_before_request_sent() {
-    run(|mock, service| {
-        mock.send(msg("pong"));
+    let (mut mock, service, _other) = mock::pipeline_client();
 
-        support::sleep_ms(20);
+    mock.send(msg("pong"));
 
-        let pong = service.call(Message::WithoutBody("ping"));
+    thread::sleep(Duration::from_millis(20));
 
-        assert_eq!("pong", pong.wait().unwrap().into_inner());
-    });
+    let pong = service.call(Message::WithoutBody("ping"));
+
+    assert_eq!("pong", pong.wait().unwrap().into_inner());
 }
 
 #[test]
 fn test_streaming_request_body() {
-    run(|mock, service| {
-        let (mut tx, rx) = stream::channel();
+    let (mut mock, service, _other) = mock::pipeline_client();
 
-        mock.allow_write();
-        let pong = service.call(Message::WithBody("ping", rx.into()));
+    let (mut tx, rx) = mpsc::channel(1);
 
-        assert_eq!("ping", mock.next_write().unwrap_msg());
+    let pong = service.call(Message::WithBody("ping",
+                                              rx.then(|r| r.unwrap()).boxed()));
 
-        for i in 0..3 {
-            mock.allow_write();
-            tx = tx.send(Ok(i)).wait().ok().unwrap();
-            assert_eq!(Some(i), mock.next_write().unwrap_body());
-        }
+    assert_eq!("ping", mock.next_write().unwrap_msg());
 
-        mock.allow_write();
-        drop(tx);
-        assert_eq!(None, mock.next_write().unwrap_body());
+    for i in 0..3 {
+        tx = tx.send(Ok(i)).wait().unwrap();
+        assert_eq!(Some(i), mock.next_write().unwrap_body());
+    }
 
-        mock.send(msg("pong"));
-        assert_eq!("pong", pong.wait().unwrap().into_inner());
+    drop(tx);
+    assert_eq!(None, mock.next_write().unwrap_body());
 
-        mock.send(pipeline::Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    mock.send(msg("pong"));
+    assert_eq!("pong", pong.wait().unwrap().into_inner());
+
+    mock.allow_and_assert_drop();
 }
 
 #[test]
@@ -101,39 +79,9 @@ fn test_streaming_request_body() {
 fn test_streaming_response_body() {
 }
 
-fn msg(msg: Msg) -> Frame {
-    pipeline::Frame::Message {
+fn msg(msg: &'static str) -> Frame<&'static str, u32, io::Error> {
+    Frame::Message {
         message: msg,
         body: false,
     }
-}
-
-/// Setup a reactor running a pipeline::Client and a mock transport. Yields the
-/// mock transport handle to the function.
-fn run<F>(f: F) where F: FnOnce(TransportHandle, Client) {
-    let _ = ::env_logger::init();
-
-    let (tx, rx) = oneshot();
-    let (tx2, rx2) = mpsc::channel();
-    let t = thread::spawn(move || {
-        let mut lp = Core::new().unwrap();
-        let handle = lp.handle();
-        let (mock, new_transport) = mock::transport::<Frame, Frame>(handle.clone());
-
-        let transport = new_transport.new_transport().unwrap();
-        let service = pipeline::connect(Ok(transport), &handle);
-
-        tx2.send((mock, service)).unwrap();
-        lp.run(rx)
-    });
-
-    let (mock, service) = rx2.recv().unwrap();
-
-    lazy(move || {
-        f(mock, service);
-        Ok::<(), ()>(())
-    }).wait().unwrap();
-
-    tx.complete(());
-    t.join().unwrap().unwrap();
 }

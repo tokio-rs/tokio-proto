@@ -8,490 +8,421 @@ extern crate rand;
 
 #[macro_use]
 extern crate log;
-extern crate env_logger;
 
-mod support;
-
-use support::multiplex as mux;
-use support::service::simple_service;
-
-use futures::{Future, finished, oneshot};
-use futures::stream::{self, Stream};
-use tokio_proto::Message;
-use tokio_proto::multiplex::{Frame};
-use rand::Rng;
 use std::io;
-use std::sync::{mpsc, Arc, Mutex};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::cell::RefCell;
 use std::thread;
 use std::time::Duration;
+
+use futures::{Future, Stream, Sink};
+use futures::future;
+use futures::sync::oneshot;
+use futures::sync::mpsc;
+use tokio_proto::streaming::{Message, Body};
+use tokio_proto::streaming::multiplex::{Frame, RequestId};
+use rand::Rng;
+
+mod support;
+use support::mock;
+use support::service::simple_service;
 
 #[test]
 fn test_immediate_done() {
     let service = simple_service(|_| {
-        finished(Message::WithoutBody("goodbye"))
+        future::ok(Message::WithoutBody("goodbye"))
     });
 
-    mux::run(service, |mock| {
-        mock.send(mux::done());
-        mock.allow_and_assert_drop();
-    });
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_immediate_writable_echo() {
     let service = simple_service(|req| {
         assert_eq!(req, "hello");
-        finished(Message::WithoutBody("goodbye"))
+        future::ok(Message::WithoutBody("goodbye"))
     });
 
-    mux::run(service, |mock| {
-        mock.allow_write();
-        mock.send(mux::message(0, "hello"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(0, "hello"));
 
-        let wr = mock.next_write();
-        assert_eq!(wr.request_id(), Some(0));
-        assert_eq!(wr.unwrap_msg(), "goodbye");
+    let wr = mock.next_write();
+    assert_eq!(wr.request_id(), 0);
+    assert_eq!(wr.unwrap_msg(), "goodbye");
 
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_immediate_writable_delayed_response_echo() {
-    let (c, fut) = oneshot();
-    let fut = Mutex::new(Some(fut));
+    let (c, fut) = oneshot::channel();
+    let fut = RefCell::new(Some(fut));
 
     let service = simple_service(move |req| {
         assert_eq!(req, "hello");
-        fut.lock().unwrap().take().unwrap().then(|r| r.unwrap())
+        fut.borrow_mut().take().unwrap().then(|r| r.unwrap())
     });
 
-    mux::run(service, |mock| {
-        mock.allow_write();
-        mock.send(mux::message(0, "hello"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(0, "hello"));
 
-        support::sleep_ms(20);
-        c.complete(Ok(Message::WithoutBody("goodbye")));
+    thread::sleep(Duration::from_millis(20));
+    c.complete(Ok(Message::WithoutBody("goodbye")));
 
-        let wr = mock.next_write();
-        assert_eq!(wr.request_id(), Some(0));
-        assert_eq!(wr.unwrap_msg(), "goodbye");
+    let wr = mock.next_write();
+    assert_eq!(wr.request_id(), 0);
+    assert_eq!(wr.unwrap_msg(), "goodbye");
 
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_delayed_writable_immediate_response_echo() {
     let service = simple_service(|req| {
         assert_eq!(req, "hello");
-        finished(Message::WithoutBody("goodbye"))
+        future::ok(Message::WithoutBody("goodbye"))
     });
 
-    mux::run(service, |mock| {
-        mock.send(mux::message(0, "hello"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(0, "hello"));
 
-        support::sleep_ms(20);
+    thread::sleep(Duration::from_millis(20));
 
-        mock.allow_write();
-
-        let wr = mock.next_write();
-        assert_eq!(wr.request_id(), Some(0));
-        assert_eq!(wr.unwrap_msg(), "goodbye");
-    });
+    let wr = mock.next_write();
+    assert_eq!(wr.request_id(), 0);
+    assert_eq!(wr.unwrap_msg(), "goodbye");
 }
 
 #[test]
 fn test_same_order_multiplexing() {
-    let (tx, rx) = mpsc::channel();
-    let tx = Mutex::new(tx);
+    let (tx, rx) = mpsc::unbounded();
 
     let service = simple_service(move |_| {
-        let (c, fut) = oneshot();
-        tx.lock().unwrap().send(c).unwrap();
+        let (c, fut) = oneshot::channel();
+        mpsc::UnboundedSender::send(&mut tx.clone(), c).unwrap();
         fut.then(|r| r.unwrap())
     });
 
-    mux::run(service, |mock| {
-        // Allow all the writes
-        for _ in 0..3 { mock.allow_write() };
+    let (mut mock, _other) = mock::multiplex_server(service);
 
-        mock.send(mux::message(0, "hello"));
-        let c1 = rx.recv().unwrap();
+    let mut rx = rx.wait();
+    mock.send(msg(0, "hello"));
+    let c1 = rx.next().unwrap().unwrap();
 
-        mock.send(mux::message(1, "hello"));
-        let c2 = rx.recv().unwrap();
+    mock.send(msg(1, "hello"));
+    let c2 = rx.next().unwrap().unwrap();
 
-        mock.send(mux::message(2, "hello"));
-        let c3 = rx.recv().unwrap();
+    mock.send(msg(2, "hello"));
+    let c3 = rx.next().unwrap().unwrap();
 
-        mock.assert_no_write(20);
+    c1.complete(Ok(Message::WithoutBody("one")));
+    thread::sleep(Duration::from_millis(20));
 
-        c1.complete(Ok(Message::WithoutBody("one")));
-        thread::sleep(Duration::from_millis(20));
+    c2.complete(Ok(Message::WithoutBody("two")));
+    thread::sleep(Duration::from_millis(20));
 
-        c2.complete(Ok(Message::WithoutBody("two")));
-        thread::sleep(Duration::from_millis(20));
+    c3.complete(Ok(Message::WithoutBody("three")));
 
-        c3.complete(Ok(Message::WithoutBody("three")));
+    let wr = mock.next_write();
+    assert_eq!(0, wr.request_id());
+    assert_eq!("one", wr.unwrap_msg());
 
-        let wr = mock.next_write();
-        assert_eq!(Some(0), wr.request_id());
-        assert_eq!("one", wr.unwrap_msg());
+    let wr = mock.next_write();
+    assert_eq!(1, wr.request_id());
+    assert_eq!("two", wr.unwrap_msg());
 
-        let wr = mock.next_write();
-        assert_eq!(Some(1), wr.request_id());
-        assert_eq!("two", wr.unwrap_msg());
-
-        let wr = mock.next_write();
-        assert_eq!(Some(2), wr.request_id());
-        assert_eq!("three", wr.unwrap_msg());
-    });
+    let wr = mock.next_write();
+    assert_eq!(2, wr.request_id());
+    assert_eq!("three", wr.unwrap_msg());
 }
 
 #[test]
 fn test_out_of_order_multiplexing() {
-    let (tx, rx) = mpsc::channel();
-    let tx = Mutex::new(tx);
+    let (tx, rx) = mpsc::unbounded();
 
     let service = simple_service(move |_| {
-        let (c, fut) = oneshot();
-        tx.lock().unwrap().send(c).unwrap();
+        let (c, fut) = oneshot::channel();
+        (&mut tx.clone()).send(c).unwrap();
         fut.then(|r| r.unwrap())
     });
 
-    mux::run(service, |mock| {
-        // Allow all the writes
-        for _ in 0..3 { mock.allow_write() };
+    let (mut mock, _other) = mock::multiplex_server(service);
 
-        mock.send(mux::message(0, "hello"));
-        let c1 = rx.recv().unwrap();
+    let mut rx = rx.wait();
+    mock.send(msg(0, "hello"));
+    let c1 = rx.next().unwrap().unwrap();
 
-        mock.send(mux::message(1, "hello"));
-        let c2 = rx.recv().unwrap();
+    mock.send(msg(1, "hello"));
+    let c2 = rx.next().unwrap().unwrap();
 
-        mock.send(mux::message(2, "hello"));
-        let c3 = rx.recv().unwrap();
+    mock.send(msg(2, "hello"));
+    let c3 = rx.next().unwrap().unwrap();
 
-        mock.assert_no_write(20);
-        c3.complete(Ok(Message::WithoutBody("three")));
+    c3.complete(Ok(Message::WithoutBody("three")));
 
-        let wr = mock.next_write();
-        assert_eq!(Some(2), wr.request_id());
-        assert_eq!("three", wr.unwrap_msg());
+    let wr = mock.next_write();
+    assert_eq!(2, wr.request_id());
+    assert_eq!("three", wr.unwrap_msg());
 
-        c2.complete(Ok(Message::WithoutBody("two")));
+    c2.complete(Ok(Message::WithoutBody("two")));
 
-        let wr = mock.next_write();
-        assert_eq!(Some(1), wr.request_id());
-        assert_eq!("two", wr.unwrap_msg());
+    let wr = mock.next_write();
+    assert_eq!(1, wr.request_id());
+    assert_eq!("two", wr.unwrap_msg());
 
 
-        c1.complete(Ok(Message::WithoutBody("one")));
+    c1.complete(Ok(Message::WithoutBody("one")));
 
-        let wr = mock.next_write();
-        assert_eq!(Some(0), wr.request_id());
-        assert_eq!("one", wr.unwrap_msg());
-    });
+    let wr = mock.next_write();
+    assert_eq!(0, wr.request_id());
+    assert_eq!("one", wr.unwrap_msg());
 }
 
 #[test]
 fn test_multiplexing_while_transport_not_writable() {
-    let (tx, rx) = mpsc::channel();
-    let tx = Mutex::new(tx);
+    let (tx, rx) = mpsc::unbounded();
 
-    let service = simple_service(move |req: Message<mux::Head, mux::Body>| {
-        tx.lock().unwrap().send(req.clone()).unwrap();
-        finished(Message::WithoutBody(*req.get_ref()))
+    let service = simple_service(move |req: Message<&'static str, Body<u32, io::Error>>| {
+        (&mut tx.clone()).send(req.clone()).unwrap();
+        future::ok(Message::WithoutBody(*req.get_ref()))
     });
 
-    mux::run(service, |mock| {
-        mock.send(mux::message(0, "one"));
-        mock.send(mux::message(1, "two"));
-        mock.send(mux::message(2, "three"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(0, "one"));
+    mock.send(msg(1, "two"));
+    mock.send(msg(2, "three"));
 
-        // Assert the service received all the requests before they are written
-        // to the transport
-        assert_eq!("one", rx.recv().unwrap());
-        assert_eq!("two", rx.recv().unwrap());
-        assert_eq!("three", rx.recv().unwrap());
+    // Assert the service received all the requests before they are written
+    // to the transport
+    let mut rx = rx.wait();
+    assert_eq!("one", rx.next().unwrap().unwrap());
+    assert_eq!("two", rx.next().unwrap().unwrap());
+    assert_eq!("three", rx.next().unwrap().unwrap());
 
-        mock.allow_write();
-        assert_eq!("one", mock.next_write().unwrap_msg());
-
-        mock.allow_write();
-        assert_eq!("two", mock.next_write().unwrap_msg());
-
-        mock.allow_write();
-        assert_eq!("three", mock.next_write().unwrap_msg());
-    });
+    assert_eq!("one", mock.next_write().unwrap_msg());
+    assert_eq!("two", mock.next_write().unwrap_msg());
+    assert_eq!("three", mock.next_write().unwrap_msg());
 }
-
 
 #[test]
 fn test_repeatedly_flushes_messages() {
     let service = simple_service(move |_| {
-        finished(Message::WithoutBody("goodbye"))
+        future::ok(Message::WithoutBody("goodbye"))
     });
 
-    mux::run(service, |mock| {
-        mock.send(mux::message(0, "hello"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(0, "hello"));
 
-        mock.allow_and_assert_flush();
-        mock.allow_and_assert_flush();
+    assert_eq!("goodbye", mock.next_write().unwrap_msg());
 
-        mock.allow_write();
-        assert_eq!("goodbye", mock.next_write().unwrap_msg());
-
-        mock.send(Frame::Done);
-        mock.assert_drop();
-    });
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_reaching_max_in_flight_requests() {
-    use futures::Oneshot;
-
-    let (tx, rx) = mpsc::channel::<Oneshot<Result<Message<mux::Head, mux::BodyBox>, io::Error>>>();
-    let rx = Arc::new(Mutex::new(rx));
+    let (mut tx, rx) = mpsc::unbounded();
+    let rx = RefCell::new(rx.wait());
 
     let c1 = Arc::new(AtomicUsize::new(0));
     let c2 = c1.clone();
 
     let service = simple_service(move |_| {
         c2.fetch_add(1, Ordering::SeqCst);
-        let fut = rx.lock().unwrap().recv().unwrap();
+        let fut = rx.borrow_mut().next().unwrap().unwrap();
+        let fut: oneshot::Receiver<_> = fut;
         fut.map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
            .and_then(|res| res)
     });
 
     let mut responses = vec![];
 
-    mux::run(service, |mock| {
-        for i in 0..33 {
-            let (c, resp) = oneshot();
-            tx.send(resp).unwrap();
-            responses.push((i, c));
-            mock.send(mux::message(i, "request"));
-        }
+    let (mut mock, _other) = mock::multiplex_server(service);
+    for i in 0..33 {
+        let (c, resp) = oneshot::channel();
+        (&mut tx).send(resp).unwrap();
+        responses.push((i, c));
+        mock.send(msg(i, "request"));
+    }
 
-        // wait a bit
-        mock.assert_no_write(100);
+    // Only 32 requests processed
+    while c1.load(Ordering::SeqCst) < 32 {
+        thread::yield_now();
+    }
 
-        // Only 32 requests processed
-        assert_eq!(32, c1.load(Ordering::SeqCst));
+    // Pick one from the first 32 requests to complete.
+    rand::thread_rng().shuffle(&mut responses[0..32]);
+    let (i, c) = responses.remove(0);
 
-        // Pick one from the first 32 requests to complete.
-        rand::thread_rng().shuffle(&mut responses[0..32]);
-        let (i, c) = responses.remove(0);
+    c.complete(Ok(Message::WithoutBody("zomg")));
 
-        c.complete(Ok(Message::WithoutBody("zomg")));
+    // Next request not yet processed
+    assert_eq!(32, c1.load(Ordering::SeqCst));
 
-        mock.assert_no_write(50);
+    // Read the response
+    let wr = mock.next_write();
+    assert_eq!(i, wr.request_id());
+    assert_eq!("zomg", wr.unwrap_msg());
 
-        // Next request not yet processed
-        assert_eq!(32, c1.load(Ordering::SeqCst));
+    // Next request is processed
+    while 33 != c1.load(Ordering::SeqCst) {
+        thread::yield_now();
+    }
 
-        // allow the write
-        mock.allow_write();
+    // Complete pending requests
+    for (i, c) in responses.drain(..) {
+        c.complete((Ok(Message::WithoutBody("zomg"))));
 
-        // Read the response
         let wr = mock.next_write();
-        assert_eq!(Some(i), wr.request_id());
+        assert_eq!(i, wr.request_id());
         assert_eq!("zomg", wr.unwrap_msg());
+    }
 
-        mock.assert_no_write(50);
-
-        // Next request is processed
-        assert_eq!(33, c1.load(Ordering::SeqCst));
-
-        // Complete pending requests
-        for (i, c) in responses.drain(..) {
-            mock.allow_write();
-            c.complete((Ok(Message::WithoutBody("zomg"))));
-
-            let wr = mock.next_write();
-            assert_eq!(Some(i), wr.request_id());
-            assert_eq!("zomg", wr.unwrap_msg());
-        }
-
-        mock.send(Frame::Done);
-        mock.assert_drop();
-    });
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_basic_streaming_response_body() {
-    let (tx, rx) = stream::channel::<u32, io::Error>();
-    let rx = Mutex::new(Some(rx));
+    let (tx, rx) = mpsc::channel(1);
+    let rx = RefCell::new(Some(rx));
 
     let service = simple_service(move |req| {
         assert_eq!(req, "want-body");
 
-        let body = rx.lock().unwrap().take().unwrap();
-        finished(Message::WithBody("hi2u", Box::new(body) as mux::BodyBox))
+        let rx = rx.borrow_mut().take().unwrap();
+        let rx = rx.then(|r| r.unwrap());
+        future::ok(Message::WithBody("hi2u", rx.boxed()))
     });
 
-    mux::run(service, |mock| {
-        mock.allow_write();
-        mock.send(mux::message(3, "want-body"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg(3, "want-body"));
 
-        let wr = mock.next_write();
-        assert_eq!(Some(3), wr.request_id());
-        assert_eq!(wr.unwrap_msg(), "hi2u");
+    let wr = mock.next_write();
+    assert_eq!(3, wr.request_id());
+    assert_eq!(wr.unwrap_msg(), "hi2u");
 
-        mock.assert_no_write(20);
+    // Allow the write, then send the message
+    let tx = tx.send(Ok(1)).wait().unwrap();
+    let wr = mock.next_write();
+    assert_eq!(3, wr.request_id());
+    assert_eq!(Some(1), wr.unwrap_body());
 
-        // Allow the write, then send the message
-        mock.allow_write();
-        let tx = tx.send(Ok(1)).wait().ok().unwrap();
-        let wr = mock.next_write();
-        assert_eq!(Some(3), wr.request_id());
-        assert_eq!(Some(1), wr.unwrap_body());
+    // Send the message then allow the write
+    let tx = tx.send(Ok(2)).wait().ok().unwrap();
+    let wr = mock.next_write();
+    assert_eq!(3, wr.request_id());
+    assert_eq!(Some(2), wr.unwrap_body());
 
-        // Send the message then allow the write
-        let tx = tx.send(Ok(2)).wait().ok().unwrap();
-        mock.assert_no_write(20);
-        mock.allow_write();
-        let wr = mock.next_write();
-        assert_eq!(Some(3), wr.request_id());
-        assert_eq!(Some(2), wr.unwrap_body());
+    drop(tx);
 
-        mock.assert_no_write(20);
-        mock.allow_write();
-        mock.assert_no_write(20);
-        drop(tx);
+    let wr = mock.next_write();
+    assert_eq!(3, wr.request_id());
+    assert_eq!(None, wr.unwrap_body());
 
-        let wr = mock.next_write();
-        assert_eq!(Some(3), wr.request_id());
-        assert_eq!(None, wr.unwrap_body());
-
-        // Alright, clean shutdown
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    // Alright, clean shutdown
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_basic_streaming_request_body_read_then_respond() {
-    let (tx, rx) = mpsc::channel();
-    let tx = Arc::new(Mutex::new(tx));
+    let (tx, rx) = mpsc::unbounded();
 
-    let service = simple_service(move |mut req: Message<mux::Head, mux::Body>| {
+    let service = simple_service(move |mut req: Message<&'static str, Body<u32, io::Error>>| {
         assert_eq!(req, "have-body");
 
         let body = req.take_body().unwrap();
-        let tx = tx.clone();
+        let mut tx = tx.clone();
 
         body.for_each(move |chunk| {
-            tx.lock().unwrap().send(chunk).unwrap();
+            (&mut tx).send(chunk).unwrap();
             Ok(())
         }).and_then(|_| {
             Ok(Message::WithoutBody("hi2u"))
         })
     });
 
-    mux::run(service, |mock| {
-        mock.allow_write();
-        mock.send(mux::message_with_body(2, "have-body"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg_with_body(2, "have-body"));
 
-        for i in 0..5 {
-            // No write yet
-            mock.assert_no_write(20);
+    let mut rx = rx.wait();
+    for i in 0..5 {
+        // Send a body chunk
+        mock.send(Frame::Body { id: 2, chunk: Some(i) });
 
-            // Send a body chunk
-            mock.send(Frame::Body { id: 2, chunk: Some(i) });
+        // Assert service processed chunk
+        assert_eq!(i, rx.next().unwrap().unwrap());
+    }
 
-            // Assert service processed chunk
-            assert_eq!(i, rx.recv().unwrap());
-        }
+    // Send end-of-stream notification
+    mock.send(Frame::Body { id: 2, chunk: None });
 
-        // Send end-of-stream notification
-        mock.send(Frame::Body { id: 2, chunk: None });
+    let wr = mock.next_write();
+    assert_eq!(2, wr.request_id());
+    assert_eq!("hi2u", wr.unwrap_msg());
 
-        let wr = mock.next_write();
-        assert_eq!(Some(2), wr.request_id());
-        assert_eq!("hi2u", wr.unwrap_msg());
-
-        // Clean shutdown
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    // Clean shutdown
+    mock.allow_and_assert_drop();
 }
 
 #[test]
 fn test_interleaving_request_body_chunks() {
-    let (tx, rx) = mpsc::channel();
-    let tx = Mutex::new(tx);
+    let (tx, rx) = mpsc::unbounded();
     let cnt = AtomicUsize::new(0);
 
-    let service = simple_service(move |mut req: Message<mux::Head, mux::Body>| {
+    let service = simple_service(move |mut req: Message<&'static str, Body<u32, io::Error>>| {
         let body = req.take_body().unwrap();
-        let tx = tx.lock().unwrap().clone();
+        let mut tx = tx.clone();
         let i = cnt.fetch_add(1, Ordering::Relaxed);
 
         assert_eq!(req, &format!("have-body-{}", i));
 
         body.for_each(move |chunk| {
-            tx.send((i, chunk)).unwrap();
+            (&mut tx).send((i, chunk)).unwrap();
             Ok(())
         }).and_then(|_| {
             Ok(Message::WithoutBody("hi2u"))
         })
     });
 
-    mux::run(service, |mock| {
-        mock.send(mux::message_with_body(2, "have-body-0"));
-        mock.send(mux::message_with_body(4, "have-body-1"));
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(msg_with_body(2, "have-body-0"));
+    mock.send(msg_with_body(4, "have-body-1"));
 
-        // The write must be allowed in order to process the bodies
-        mock.allow_write();
+    let mut rx = rx.wait();
+    for i in 0..5 {
+        if i % 2 == 0 {
+            // Send a body chunk
+            mock.send(Frame::Body { id: 2, chunk: Some(i) });
+            assert_eq!((0, i), rx.next().unwrap().unwrap());
 
-        for i in 0..5 {
-            if i % 2 == 0 {
-                // No write yet
-                mock.assert_no_write(20);
+            mock.send(Frame::Body { id: 4, chunk: Some(i) });
+            assert_eq!((1, i), rx.next().unwrap().unwrap());
+        } else {
+            mock.send(Frame::Body { id: 4, chunk: Some(i) });
+            assert_eq!((1, i), rx.next().unwrap().unwrap());
 
-                // Send a body chunk
-                mock.send(Frame::Body { id: 2, chunk: Some(i) });
-                assert_eq!((0, i), rx.recv().unwrap());
-
-                mock.send(Frame::Body { id: 4, chunk: Some(i) });
-                assert_eq!((1, i), rx.recv().unwrap());
-            } else {
-                // No write yet
-                mock.assert_no_write(20);
-
-                mock.send(Frame::Body { id: 4, chunk: Some(i) });
-                assert_eq!((1, i), rx.recv().unwrap());
-
-                // Send a body chunk
-                mock.send(Frame::Body { id: 2, chunk: Some(i) });
-                assert_eq!((0, i), rx.recv().unwrap());
-            }
+            // Send a body chunk
+            mock.send(Frame::Body { id: 2, chunk: Some(i) });
+            assert_eq!((0, i), rx.next().unwrap().unwrap());
         }
+    }
 
-        // Send end-of-stream notification
-        mock.send(Frame::Body { id: 2, chunk: None });
+    // Send end-of-stream notification
+    mock.send(Frame::Body { id: 2, chunk: None });
 
-        let wr = mock.next_write();
-        assert_eq!(Some(2), wr.request_id());
-        assert_eq!("hi2u", wr.unwrap_msg());
+    let wr = mock.next_write();
+    assert_eq!(2, wr.request_id());
+    assert_eq!("hi2u", wr.unwrap_msg());
 
-        mock.allow_write();
-        mock.send(Frame::Body { id: 4, chunk: None });
+    mock.send(Frame::Body { id: 4, chunk: None });
 
-        let wr = mock.next_write();
-        assert_eq!(Some(4), wr.request_id());
-        assert_eq!("hi2u", wr.unwrap_msg());
+    let wr = mock.next_write();
+    assert_eq!(4, wr.request_id());
+    assert_eq!("hi2u", wr.unwrap_msg());
 
-        // Clean shutdown
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
-    });
+    // Clean shutdown
+    mock.allow_and_assert_drop();
 }
 
 #[test]
@@ -514,16 +445,15 @@ fn test_read_error_as_first_frame() {
             panic!("should not be called");
         }
 
-        finished(Message::WithoutBody("nope"))
+        future::ok(Message::WithoutBody("nope"))
     });
 
-    mux::run(service, |mock| {
-        mock.allow_write();
-        mock.send(Frame::Error { id: 1, error: io::Error::new(io::ErrorKind::Other, "boom") });
-
-        mock.send(Frame::Done);
-        mock.allow_and_assert_drop();
+    let (mut mock, _other) = mock::multiplex_server(service);
+    mock.send(Frame::Error {
+        id: 1,
+        error: io::Error::new(io::ErrorKind::Other, "boom"),
     });
+    mock.allow_and_assert_drop();
 }
 
 #[test]
@@ -537,4 +467,22 @@ fn test_error_handling_before_message_dispatched() {
         unimplemented!();
     });
     */
+}
+
+fn msg(id: RequestId, msg: &'static str) -> Frame<&'static str, u32, io::Error> {
+    Frame::Message {
+        id: id,
+        message: msg,
+        body: false,
+        solo: false,
+    }
+}
+
+fn msg_with_body(id: RequestId, msg: &'static str) -> Frame<&'static str, u32, io::Error> {
+    Frame::Message {
+        id: id,
+        message: msg,
+        body: true,
+        solo: false,
+    }
 }
