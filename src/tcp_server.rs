@@ -132,7 +132,10 @@ fn serve<P, Kind, S>(binder: Arc<P>, addr: SocketAddr, workers: usize, new_servi
 fn listener(addr: &SocketAddr,
             workers: usize,
             handle: &Handle) -> io::Result<TcpListener> {
-    let listener = try!(net2::TcpBuilder::new_v4());
+    let listener = match *addr {
+        SocketAddr::V4(_) => try!(net2::TcpBuilder::new_v4()),
+        SocketAddr::V6(_) => try!(net2::TcpBuilder::new_v6()),
+    };
     try!(configure_tcp(workers, &listener));
     try!(listener.reuse_address(true));
     try!(listener.bind(addr));
