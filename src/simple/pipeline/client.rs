@@ -88,6 +88,7 @@ impl<T, P> streaming::pipeline::ClientProto<T> for LiftProto<P> where
     }
 }
 
+/// Client `Service` for simple pipeline protocols
 pub struct ClientService<T, P> where T: 'static, P: ClientProto<T> {
     inner: <LiftProto<P> as BindClient<StreamingPipeline<MyStream<P::Error>>, T>>::BindClient
 }
