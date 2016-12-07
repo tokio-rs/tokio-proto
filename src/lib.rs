@@ -193,7 +193,7 @@ pub mod streaming;
 pub mod util;
 
 mod tcp_client;
-pub use tcp_client::TcpClient;
+pub use tcp_client::{TcpClient, Connect};
 
 mod tcp_server;
 pub use tcp_server::TcpServer;
