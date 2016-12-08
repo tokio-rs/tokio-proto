@@ -272,10 +272,8 @@ impl<T> Pipeline<T> where T: Dispatch {
                 }
                 Async::Ready(None) => {
                     trace!("   --> got None");
-                    // The service is done with the connection. In this case, a
-                    // `Done` frame should be written to the transport and the
-                    // transport should start shutting down.
-                    unimplemented!();
+                    // The service is done with the connection.
+                    break;
                 }
                 // Nothing to dispatch
                 Async::NotReady => break,

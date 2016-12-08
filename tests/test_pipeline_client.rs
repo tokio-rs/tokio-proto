@@ -79,6 +79,34 @@ fn test_streaming_request_body() {
 fn test_streaming_response_body() {
 }
 
+#[test]
+fn test_streaming_client_dropped() {
+    let (mut tx, mut mock, pong, _other) = {
+        let (mock, service, _other) = mock::pipeline_client();
+
+        let (tx, rx) = mpsc::channel(1);
+
+        let pong = service.call(Message::WithBody("ping",
+                                                  rx.then(|r| r.unwrap()).boxed()));
+        (tx, mock, pong, _other)
+    };
+
+    assert_eq!("ping", mock.next_write().unwrap_msg());
+
+    for i in 0..3 {
+        tx = tx.send(Ok(i)).wait().unwrap();
+        assert_eq!(Some(i), mock.next_write().unwrap_body());
+    }
+
+    drop(tx);
+    assert_eq!(None, mock.next_write().unwrap_body());
+
+    mock.send(msg("pong"));
+    assert_eq!("pong", pong.wait().unwrap().into_inner());
+
+    mock.allow_and_assert_drop();
+}
+
 fn msg(msg: &'static str) -> Frame<&'static str, u32, io::Error> {
     Frame::Message {
         message: msg,
