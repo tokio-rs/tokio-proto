@@ -23,7 +23,7 @@
 //! for each request, the response must be received before sending another
 //! request on the same connection.
 //!
-//! In a **multiplexd protocol**, the server responds to client requests in the
+//! In a **multiplexed protocol**, the server responds to client requests in the
 //! order of completion. Request IDs are used to match responses back to requests.
 //!
 //! In both cases, if multiple requests are sent, the service running on the
