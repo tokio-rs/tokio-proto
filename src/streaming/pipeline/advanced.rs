@@ -10,6 +10,7 @@ use futures::{Future, Poll, Async, Stream, Sink, AsyncSink, StartSend};
 use std::io;
 use streaming::{Message, Body};
 use super::{Frame, Transport};
+use buffer_one::BufferOne;
 
 // TODO:
 //
@@ -81,10 +82,7 @@ pub trait Dispatch {
     fn has_in_flight(&self) -> bool;
 }
 
-struct BodySender<B, E> {
-    sender: mpsc::Sender<Result<B, E>>,
-    queued: Option<Result<B, E>>,
-}
+type BodySender<B, E> = BufferOne<mpsc::Sender<Result<B, E>>>;
 
 struct MyTransport<'a, T: Dispatch + 'a> {
     inner: &'a mut Pipeline<T>,
@@ -111,6 +109,7 @@ impl<T> Pipeline<T> where T: Dispatch {
 
     fn read_out_frames(&mut self) -> io::Result<()> {
         while self.run {
+            // Return true if the pipeliner can process new outbound frames
             if !self.check_out_body_stream() {
                 break;
             }
@@ -131,18 +130,7 @@ impl<T> Pipeline<T> where T: Dispatch {
             None => return true,
         };
 
-        if let Some(msg) = body.queued.take() {
-            match body.sender.start_send(msg) {
-                Ok(AsyncSink::Ready) => {}
-                Ok(AsyncSink::NotReady(msg)) => {
-                    body.queued = Some(msg);
-                    return false
-                }
-                Err(_) => unimplemented!(),
-            }
-        }
-        debug!("ready for a send");
-        return true
+        body.poll_ready().is_ready()
     }
 
     fn process_out_frame(&mut self,
@@ -162,7 +150,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                     // Track the out body sender. If `self.out_body`
                     // currently holds a sender for the previous out body, it
                     // will get dropped. This terminates the stream.
-                    self.out_body = Some(BodySender { sender: tx, queued: None });
+                    self.out_body = Some(BufferOne::new(tx));
 
                     if let Err(_) = self.dispatch.dispatch(Ok(message)) {
                         // TODO: Should dispatch be infallible
@@ -224,18 +212,12 @@ impl<T> Pipeline<T> where T: Dispatch {
                 debug!("sending a chunk");
 
                 // Try sending the out body chunk
-                match body.sender.start_send(Ok(chunk)) {
+                match body.start_send(Ok(chunk)) {
                     Ok(AsyncSink::Ready) => debug!("immediately done"),
                     Err(_e) => reset = true, // interest canceled
-                    Ok(AsyncSink::NotReady(msg)) => {
-                        debug!("not done yet");
-                        if body.queued.is_some() {
-                            // This case should never happen but it may be
-                            // better to fail a bit more gracefully in the event
-                            // of an internal bug than to panic.
-                            unimplemented!();
-                        }
-                        body.queued = Some(msg);
+                    Ok(AsyncSink::NotReady(_)) => {
+                        // poll_ready() is checked before entering this path
+                        unreachable!();
                     }
                 }
             }

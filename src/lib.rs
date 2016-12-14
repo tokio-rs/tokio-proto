@@ -201,6 +201,9 @@ pub use tcp_server::TcpServer;
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
 
+// TODO: move this into futures-rs
+mod buffer_one;
+
 /// Binds a service to an I/O object.
 ///
 /// This trait is not intended to be implemented directly; instead, implement
