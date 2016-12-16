@@ -96,6 +96,29 @@ impl<T> FrameDeque<T> {
         }
     }
 
+    pub fn push_front(&self, val: T) {
+        unsafe {
+            let ptr;
+            let slot = (*self.inner.get())
+                .reserve_slot()
+                .expect("FrameBuf out of capacity");
+
+            debug_assert!(slot.next.is_null());
+
+            slot.val = Some(val);
+            slot.next = self.head.get();
+
+            ptr = slot as *mut Slot<T>;
+            self.head.set(ptr);
+
+            if self.tail.get().as_ref().is_none() {
+                self.tail.set(ptr);
+            }
+
+            self.len.set(self.len.get() + 1);
+        }
+    }
+
     pub fn pop(&self) -> Option<T> {
         unsafe {
             let ptr = self.head.get();
