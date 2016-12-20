@@ -89,6 +89,7 @@ impl<T, P> streaming::multiplex::ClientProto<T> for LiftProto<P> where
     }
 }
 
+/// Client `Service` for simple multiplex protocols
 pub struct ClientService<T, P> where T: 'static, P: ClientProto<T> {
     inner: <LiftProto<P> as BindClient<StreamingMultiplex<MyStream<P::Error>>, T>>::BindClient
 }

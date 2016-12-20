@@ -4,6 +4,7 @@
 
 mod client;
 pub use self::client::ClientProto;
+pub use self::client::ClientService;
 
 mod server;
 pub use self::server::ServerProto;
