@@ -106,6 +106,14 @@ impl<T, P> Service for ClientService<T, P> where T: 'static, P: ClientProto<T> {
     }
 }
 
+impl<T, P> Clone for ClientService<T, P> where T: 'static, P: ClientProto<T> {
+    fn clone(&self) -> Self {
+        ClientService {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 pub struct ClientFuture<T, P> where T: 'static, P: ClientProto<T> {
     inner: <<LiftProto<P> as BindClient<StreamingMultiplex<MyStream<P::Error>>, T>>::BindClient
             as Service>::Future

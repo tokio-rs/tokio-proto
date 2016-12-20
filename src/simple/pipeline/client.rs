@@ -93,6 +93,14 @@ pub struct ClientService<T, P> where T: 'static, P: ClientProto<T> {
     inner: <LiftProto<P> as BindClient<StreamingPipeline<MyStream<P::Error>>, T>>::BindClient
 }
 
+impl<T, P> Clone for ClientService<T, P> where T: 'static, P: ClientProto<T> {
+    fn clone(&self) -> Self {
+        ClientService {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl<T, P> Service for ClientService<T, P> where T: 'static, P: ClientProto<T> {
     type Request = P::Request;
     type Response = P::Response;

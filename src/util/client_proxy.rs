@@ -24,6 +24,14 @@ pub struct ClientProxy<R, S, E> {
     tx: RefCell<mpsc::UnboundedSender<io::Result<Envelope<R, S, E>>>>,
 }
 
+impl<R, S, E> Clone for ClientProxy<R, S, E> {
+    fn clone(&self) -> Self {
+        ClientProxy {
+            tx: RefCell::new(self.tx.borrow().clone()),
+        }
+    }
+}
+
 /// Response future returned from a client
 pub struct Response<T, E> {
     inner: oneshot::Receiver<Result<T, E>>,
