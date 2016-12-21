@@ -4,6 +4,7 @@
 
 use std::io;
 use futures::{Stream, Sink, Async};
+use tokio_core::io::{Io, Framed, Codec};
 
 mod frame_buf;
 
@@ -15,6 +16,7 @@ pub use self::server::ServerProto;
 
 mod frame;
 pub use self::frame::Frame;
+
 
 pub mod advanced;
 
@@ -61,3 +63,5 @@ pub trait Transport<ReadBody>: 'static +
         drop(body);
     }
 }
+
+impl<T:Io + 'static, C: Codec + 'static, ReadBody> Transport<ReadBody> for Framed<T,C> {}
