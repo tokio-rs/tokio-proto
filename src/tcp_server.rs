@@ -84,6 +84,24 @@ impl<Kind, P> TcpServer<Kind, P> where
                       Response = P::ServiceResponse,
                       Error = P::ServiceError> + Send + Sync + 'static,
     {
+        let new_service = Arc::new(new_service);
+        self.with_handle(move |_| new_service.clone())
+    }
+
+    /// Start up the server, providing the given service on it, and providing
+    /// access to the event loop handle.
+    ///
+    /// The `new_service` argument is a closure that is given an event loop
+    /// handle, and produces a value implementing `NewService`. That value is in
+    /// turned used to make a new service instance for each incoming connection.
+    ///
+    /// This method will block the current thread until the server is shut down.
+    pub fn with_handle<F, S>(&self, new_service: F) where
+        F: Fn(&Handle) -> S + Send + Sync + 'static,
+        S: NewService<Request = P::ServiceRequest,
+                      Response = P::ServiceResponse,
+                      Error = P::ServiceError> + Send + Sync + 'static,
+    {
         let proto = self.proto.clone();
         let new_service = Arc::new(new_service);
         let addr = self.addr;
@@ -94,11 +112,11 @@ impl<Kind, P> TcpServer<Kind, P> where
             let new_service = new_service.clone();
 
             thread::Builder::new().name(format!("worker{}", i)).spawn(move || {
-                serve(proto, addr, workers, &new_service)
+                serve(proto, addr, workers, &*new_service)
             }).unwrap()
         }).collect::<Vec<_>>();
 
-        serve(proto, addr, workers, &new_service);
+        serve(proto, addr, workers, &*new_service);
 
         for thread in threads {
             thread.join().unwrap();
@@ -106,14 +124,16 @@ impl<Kind, P> TcpServer<Kind, P> where
     }
 }
 
-fn serve<P, Kind, S>(binder: Arc<P>, addr: SocketAddr, workers: usize, new_service: &S)
+fn serve<P, Kind, F, S>(binder: Arc<P>, addr: SocketAddr, workers: usize, new_service: &F)
     where P: BindServer<Kind, TcpStream>,
+          F: Fn(&Handle) -> S,
           S: NewService<Request = P::ServiceRequest,
                         Response = P::ServiceResponse,
                         Error = P::ServiceError> + 'static,
 {
     let mut core = Core::new().unwrap();
     let handle = core.handle();
+    let new_service = new_service(&handle);
     let listener = listener(&addr, workers, &handle).unwrap();
 
     let server = listener.incoming().for_each(move |(socket, _)| {
