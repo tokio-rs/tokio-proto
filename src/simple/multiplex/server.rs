@@ -98,7 +98,7 @@ impl<S: Service> Service for LiftService<S> {
     type Error = S::Error;
     type Future = LiftFuture<S::Future, stream::Empty<(), S::Error>>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, req: Self::Request) -> Self::Future {
         match req {
             Message::WithoutBody(msg) => {
                 LiftFuture(self.0.call(msg), marker::PhantomData)

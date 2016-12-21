@@ -107,7 +107,7 @@ impl<T, P> Service for ClientService<T, P> where T: 'static, P: ClientProto<T> {
     type Error = P::Error;
     type Future = ClientFuture<T, P>;
 
-    fn call(&self, req: P::Request) -> Self::Future {
+    fn call(&mut self, req: P::Request) -> Self::Future {
         ClientFuture {
             inner: self.inner.call(Message::WithoutBody(req))
         }

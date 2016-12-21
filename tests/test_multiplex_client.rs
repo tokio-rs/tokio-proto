@@ -23,7 +23,7 @@ use support::mock;
 
 #[test]
 fn test_ping_pong_close() {
-    let (mut mock, service, _other) = mock::multiplex_client();
+    let (mut mock, mut service, _other) = mock::multiplex_client();
 
     let pong = service.call(Message::WithoutBody("ping"));
     let wr = mock.next_write();
@@ -38,7 +38,7 @@ fn test_ping_pong_close() {
 
 #[test]
 fn test_error_on_response() {
-    let (mut mock, service, _other) = mock::multiplex_client();
+    let (mut mock, mut service, _other) = mock::multiplex_client();
 
     let pong = service.call(Message::WithoutBody("ping"));
 
@@ -58,7 +58,7 @@ fn test_error_on_response() {
 
 #[test]
 fn drop_client_while_streaming_body() {
-    let (mut mock, service, _other) = mock::multiplex_client();
+    let (mut mock, mut service, _other) = mock::multiplex_client();
 
     let pong = service.call(Message::WithoutBody("ping"));
 

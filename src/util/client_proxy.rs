@@ -17,17 +17,16 @@ use futures::{Future, Async, Poll, Stream, AsyncSink, Sink};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
 use std::io;
-use std::cell::RefCell;
 
 /// Client `Service` for pipeline or multiplex protocols
 pub struct ClientProxy<R, S, E> {
-    tx: RefCell<mpsc::UnboundedSender<io::Result<Envelope<R, S, E>>>>,
+    tx: mpsc::UnboundedSender<io::Result<Envelope<R, S, E>>>,
 }
 
 impl<R, S, E> Clone for ClientProxy<R, S, E> {
     fn clone(&self) -> Self {
         ClientProxy {
-            tx: RefCell::new(self.tx.borrow().clone()),
+            tx: self.tx.clone(),
         }
     }
 }
@@ -53,7 +52,7 @@ pub fn pair<R, S, E>() -> Pair<R, S, E> {
     let (tx, rx) = mpsc::unbounded();
 
     // Use the sender handle to create a `Client` handle
-    let client = ClientProxy { tx: RefCell::new(tx) };
+    let client = ClientProxy { tx: tx };
 
     // Return the pair
     (client, rx)
@@ -65,11 +64,11 @@ impl<R, S, E: From<io::Error>> Service for ClientProxy<R, S, E> {
     type Error = E;
     type Future = Response<S, E>;
 
-    fn call(&self, request: R) -> Self::Future {
+    fn call(&mut self, request: R) -> Self::Future {
         let (tx, rx) = oneshot::channel();
 
         // TODO: handle error
-        match mpsc::UnboundedSender::send(&mut self.tx.borrow_mut(),
+        match mpsc::UnboundedSender::send(&mut self.tx,
                                           Ok((request, tx))) {
             Ok(()) => {}
             Err(_) => panic!("receiving end of client is gone"),

@@ -4,15 +4,13 @@ extern crate tokio_proto;
 extern crate tokio_service;
 
 use std::io;
-use futures::{Future, BoxFuture};
+use futures::{BoxFuture};
 use tokio_core::io::{Io, Codec, Framed, EasyBuf};
 use tokio_proto::TcpServer;
 use tokio_proto::streaming::{Message, Body};
 use tokio_proto::streaming::pipeline;
 use tokio_proto::streaming::multiplex;
 use tokio_service::Service;
-
-
 
 #[derive(Default)]
 struct PipelineCodec;
@@ -21,11 +19,11 @@ impl Codec for PipelineCodec {
     type In = pipeline::Frame<u32, (), io::Error>;
     type Out = pipeline::Frame<u32, u32, io::Error>;
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
+    fn decode(&mut self, _: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         Ok(None)
     }
 
-    fn encode(&mut self, item: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
+    fn encode(&mut self, _: Self::Out, _: &mut Vec<u8>) -> io::Result<()> {
         Ok(())
     }
 }
@@ -37,11 +35,11 @@ impl Codec for MultiplexCodec {
     type In = multiplex::Frame<u32, (), io::Error>;
     type Out = multiplex::Frame<u32, u32, io::Error>;
 
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
+    fn decode(&mut self, _: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
         Ok(None)
     }
 
-    fn encode(&mut self, item: Self::Out, buf: &mut Vec<u8>) -> io::Result<()> {
+    fn encode(&mut self, _: Self::Out, _: &mut Vec<u8>) -> io::Result<()> {
         Ok(())
     }
 }
@@ -87,7 +85,7 @@ impl Service for TestService {
     type Error = io::Error;
     type Future = BoxFuture<Self::Response, io::Error>;
 
-    fn call(&self, req: Self::Request) -> Self::Future {
+    fn call(&mut self, _: Self::Request) -> Self::Future {
         unimplemented!();
     }
 }
