@@ -48,10 +48,10 @@ impl<Kind, P> TcpServer<Kind, P> where
     /// `BindServer` trait directly, but instead by implementing one of the
     /// protocol traits:
     ///
-    /// - `pipeline::Server`
-    /// - `multiplex::Server`
-    /// - `streaming::pipeline::Server`
-    /// - `streaming::multiplex::Server`
+    /// - `pipeline::ServerProto`
+    /// - `multiplex::ServerProto`
+    /// - `streaming::pipeline::ServerProto`
+    /// - `streaming::multiplex::ServerProto`
     ///
     /// See the crate documentation for more details on those traits.
     pub fn new(protocol: P, addr: SocketAddr) -> TcpServer<Kind, P> {
