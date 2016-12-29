@@ -107,6 +107,16 @@ fn test_streaming_client_dropped() {
     mock.allow_and_assert_drop();
 }
 
+#[test]
+fn test_streaming_client_transport_dropped() {
+    let (mut mock, mut service, _) = mock::pipeline_client();
+    let pong = service.call(Message::WithoutBody("ping"));
+
+    assert_eq!(pong.wait().unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+
+    mock.allow_and_assert_drop();
+}
+
 fn msg(msg: &'static str) -> Frame<&'static str, u32, io::Error> {
     Frame::Message {
         message: msg,

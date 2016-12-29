@@ -68,12 +68,14 @@ impl<R, S, E: From<io::Error>> Service for ClientProxy<R, S, E> {
     fn call(&self, request: R) -> Self::Future {
         let (tx, rx) = oneshot::channel();
 
-        // TODO: handle error
-        match mpsc::UnboundedSender::send(&mut self.tx.borrow_mut(),
-                                          Ok((request, tx))) {
-            Ok(()) => {}
-            Err(_) => panic!("receiving end of client is gone"),
-        }
+        // If send returns an Err, its because the other side has been dropped.
+        // By ignoring it, we are just dropping the `tx`, which will mean the
+        // rx will return Canceled when polled. In turn, that is translated
+        // into a BrokenPipe, which conveys the proper error.
+        // NOTE: If Service changes to have some sort of `try_call`, it'd
+        // probably be more appropriate to return the Request.
+        let _ = mpsc::UnboundedSender::send(&mut self.tx.borrow_mut(),
+                                            Ok((request, tx)));
 
         Response { inner: rx }
     }
