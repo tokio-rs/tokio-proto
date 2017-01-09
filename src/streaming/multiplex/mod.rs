@@ -2,7 +2,7 @@
 //!
 //! See the crate-level docs for an overview.
 
-use std::io;
+use std::{io, u64};
 use futures::{Stream, Sink, Async};
 use tokio_core::io::{Io, Framed, Codec};
 
@@ -28,6 +28,54 @@ pub type RequestId = u64;
 /// This is an implementation detail; to actually implement a protocol,
 /// implement the `ClientProto` or `ServerProto` traits in this module.
 pub struct StreamingMultiplex<B>(B);
+
+/// Multiplex configuration options
+#[derive(Debug, Copy, Clone)]
+pub struct MultiplexConfig {
+    /// Maximum number of in-flight requests
+    max_in_flight: usize,
+    max_response_displacement: u64,
+    max_buffered_frames: usize,
+}
+
+impl MultiplexConfig {
+    /// Set the maximum number of requests to process concurrently
+    ///
+    /// Default: 100
+    pub fn max_in_flight(&mut self, val: usize) -> &mut Self {
+        self.max_in_flight = val;
+        self
+    }
+
+    /// Maximum number of frames to buffer before stopping to read from the
+    /// transport
+    pub fn max_buffered_frames(&mut self, val: usize) -> &mut Self {
+        self.max_buffered_frames = val;
+        self
+    }
+
+    /// Set the maximum response displacement
+    ///
+    /// For each request, the response displacement is the number of requests
+    /// that arrived after and were completed before. A value of 0 is equivalent
+    /// to pipelining for protocols without streaming bodies.
+    ///
+    /// Default: `usize::MAX`
+    pub fn max_response_displacement(&mut self, val: u64) -> &mut Self {
+        self.max_response_displacement = val;
+        self
+    }
+}
+
+impl Default for MultiplexConfig {
+    fn default() -> Self {
+        MultiplexConfig {
+            max_in_flight: 100,
+            max_buffered_frames: 128,
+            max_response_displacement: u64::MAX,
+        }
+    }
+}
 
 /// Additional transport details relevant to streaming, multiplexed protocols.
 ///

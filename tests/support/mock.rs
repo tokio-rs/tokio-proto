@@ -15,14 +15,17 @@ use self::futures::sync::oneshot;
 use self::futures::{Future, Stream, Sink, Poll, StartSend, Async};
 use self::tokio_core::io::Io;
 use self::tokio_core::reactor::Core;
-use self::tokio_proto::streaming::multiplex;
+use self::tokio_proto::streaming::multiplex::{self, MultiplexConfig};
 use self::tokio_proto::streaming::pipeline;
 use self::tokio_proto::streaming::{Message, Body};
 use self::tokio_proto::util::client_proxy::Response;
 use self::tokio_proto::{BindClient, BindServer};
 use self::tokio_service::Service;
 
-struct MockProtocol<T>(RefCell<Option<MockTransport<T>>>);
+struct MockProtocol<T> {
+    transport: RefCell<Option<MockTransport<T>>>,
+    multiplex_config: Option<MultiplexConfig>,
+}
 
 impl<T, U, I> pipeline::ClientProto<I> for MockProtocol<pipeline::Frame<T, U, io::Error>>
     where T: 'static,
@@ -39,7 +42,7 @@ impl<T, U, I> pipeline::ClientProto<I> for MockProtocol<pipeline::Frame<T, U, io
 
     fn bind_transport(&self, _io: I)
                       -> Result<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
-        Ok(self.0.borrow_mut().take().unwrap())
+        Ok(self.transport.borrow_mut().take().unwrap())
     }
 }
 
@@ -58,7 +61,11 @@ impl<T, U, I> multiplex::ClientProto<I> for MockProtocol<multiplex::Frame<T, U, 
 
     fn bind_transport(&self, _io: I)
                       -> Result<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
-        Ok(self.0.borrow_mut().take().unwrap())
+        Ok(self.transport.borrow_mut().take().unwrap())
+    }
+
+    fn multiplex_config(&self) -> MultiplexConfig {
+        self.multiplex_config.unwrap_or(MultiplexConfig::default())
     }
 }
 
@@ -77,7 +84,7 @@ impl<T, U, I> pipeline::ServerProto<I> for MockProtocol<pipeline::Frame<T, U, io
 
     fn bind_transport(&self, _io: I)
                       -> Result<MockTransport<pipeline::Frame<T, U, io::Error>>, io::Error> {
-        Ok(self.0.borrow_mut().take().unwrap())
+        Ok(self.transport.borrow_mut().take().unwrap())
     }
 }
 
@@ -96,7 +103,11 @@ impl<T, U, I> multiplex::ServerProto<I> for MockProtocol<multiplex::Frame<T, U, 
 
     fn bind_transport(&self, _io: I)
                       -> Result<MockTransport<multiplex::Frame<T, U, io::Error>>, io::Error> {
-        Ok(self.0.borrow_mut().take().unwrap())
+        Ok(self.transport.borrow_mut().take().unwrap())
+    }
+
+    fn multiplex_config(&self) -> MultiplexConfig {
+        self.multiplex_config.unwrap_or(MultiplexConfig::default())
     }
 }
 
@@ -186,15 +197,23 @@ impl<T> MockTransportCtl<T> {
 fn transport<T>() -> (MockTransportCtl<T>, MockProtocol<T>) {
     let (tx1, rx1) = mpsc::channel(1);
     let (tx2, rx2) = mpsc::unbounded();
+
     let ctl = MockTransportCtl {
         tx: Some(tx2),
         rx: rx1.wait(),
     };
+
     let transport = MockTransport {
         tx: tx1,
         rx: rx2,
     };
-    (ctl, MockProtocol(RefCell::new(Some(transport))))
+
+    let proto = MockProtocol {
+        transport: RefCell::new(Some(transport)),
+        multiplex_config: None,
+    };
+
+    (ctl, proto)
 }
 
 struct CompleteOnDrop {
@@ -301,7 +320,20 @@ pub fn multiplex_client()
     return (ctl, Box::new(service), Box::new(srv));
 }
 
+/// Spawns a new multiplex server with default settings, returning a handle to
+/// the mock transport as well as a handle to the running server
 pub fn multiplex_server<S>(s: S)
+    -> (MockTransportCtl<multiplex::Frame<&'static str, u32, io::Error>>, Box<Any>)
+    where S: Service<Request = Message<&'static str, Body<u32, io::Error>>,
+                     Response = Message<&'static str, MockBodyStream>,
+                     Error = io::Error> + Send + 'static,
+{
+    configured_multiplex_server(s, MultiplexConfig::default())
+}
+
+/// Spawns a new multiplex server, returning a handle to the mock transport as
+/// well as a handle to the running server
+pub fn configured_multiplex_server<S>(s: S, config: MultiplexConfig)
     -> (MockTransportCtl<multiplex::Frame<&'static str, u32, io::Error>>, Box<Any>)
     where S: Service<Request = Message<&'static str, Body<u32, io::Error>>,
                      Response = Message<&'static str, MockBodyStream>,
@@ -309,7 +341,8 @@ pub fn multiplex_server<S>(s: S)
 {
     drop(env_logger::init());
 
-    let (ctl, proto) = transport();
+    let (ctl, mut proto) = transport();
+    proto.multiplex_config = Some(config);
 
     let (finished_tx, finished_rx) = oneshot::channel();
     let t = thread::spawn(move || {

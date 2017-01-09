@@ -1,4 +1,4 @@
-use super::{Frame, RequestId, Transport};
+use super::{Frame, RequestId, Transport, MultiplexConfig};
 use super::advanced::{Multiplex, MultiplexMessage};
 
 use BindServer;
@@ -65,6 +65,11 @@ pub trait ServerProto<T: 'static>: 'static {
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
     fn bind_transport(&self, io: T) -> Self::BindTransport;
+
+    /// Returns the multiplex configuration values
+    fn multiplex_config(&self) -> MultiplexConfig {
+        MultiplexConfig::default()
+    }
 }
 
 impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
@@ -81,13 +86,18 @@ impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
                          Response = Self::ServiceResponse,
                          Error = Self::ServiceError> + 'static
     {
-        let task = self.bind_transport(io).into_future().and_then(|transport| {
+        let multiplex_config = self.multiplex_config();
+
+        let task = self.bind_transport(io).into_future().and_then(move |transport| {
             let dispatch: Dispatch<S, T, P> = Dispatch {
                 service: service,
                 transport: transport,
                 in_flight: vec![],
+                num_received: 0,
+                config: multiplex_config,
             };
-            Multiplex::new(dispatch)
+
+            Multiplex::new_configured(dispatch, &multiplex_config)
         }).map_err(|_| ());
 
         // Spawn the multiplex dispatcher
@@ -101,7 +111,11 @@ struct Dispatch<S, T, P> where
     // The service handling the connection
     service: S,
     transport: P::Transport,
-    in_flight: Vec<(RequestId, InFlight<S::Future>)>,
+    in_flight: Vec<(RequestId, u64, InFlight<S::Future>)>,
+    // Counts the number of received requests
+    num_received: u64,
+    // Multiplex configuration settings
+    config: MultiplexConfig,
 }
 
 enum InFlight<F: Future> {
@@ -137,15 +151,26 @@ impl<P, T, B, S> super::advanced::Dispatch for Dispatch<S, T, P> where
 
         let mut idx = None;
 
-        for (i, &mut (request_id, ref mut slot)) in self.in_flight.iter_mut().enumerate() {
+        // Get the number for the earliest in-flight
+        let earliest = match self.in_flight.first() {
+            Some(&(_, num, _)) => {
+                num
+            }
+            None => return Ok(Async::NotReady),
+        };
+
+        for (i, &mut (request_id, num, ref mut slot)) in self.in_flight.iter_mut().enumerate() {
             trace!("   --> poll; request_id={:?}", request_id);
+
             if slot.poll() && idx.is_none() {
-                idx = Some(i);
+                if num - earliest <= self.config.max_response_displacement {
+                    idx = Some(i);
+                }
             }
         }
 
         if let Some(idx) = idx {
-            let (request_id, message) = self.in_flight.remove(idx);
+            let (request_id, _, message) = self.in_flight.remove(idx);
             let message = MultiplexMessage {
                 id: request_id,
                 message: message.unwrap_done(),
@@ -166,8 +191,11 @@ impl<P, T, B, S> super::advanced::Dispatch for Dispatch<S, T, P> where
         assert!(!solo);
 
         if let Ok(request) = message {
+            let num = self.num_received;
+            self.num_received += 1;
+
             let response = self.service.call(request);
-            self.in_flight.push((id, InFlight::Active(response)));
+            self.in_flight.push((id, num, InFlight::Active(response)));
         }
 
         // TODO: Should the error be handled differently?

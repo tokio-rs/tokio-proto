@@ -12,7 +12,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use super::frame_buf::{FrameBuf, FrameDeque};
-use super::{Frame, RequestId, Transport};
+use super::{Frame, RequestId, Transport, MultiplexConfig};
 use buffer_one::BufferOne;
 
 /*
@@ -28,12 +28,6 @@ use buffer_one::BufferOne;
  * - Move constants to configuration settings
  *
  */
-
-/// The max number of buffered frames that the connection can support. Once
-/// this number is reached.
-///
-/// See module docs for more detail
-const MAX_BUFFERED_FRAMES: usize = 128;
 
 /// Task that drives multiplexed protocols
 ///
@@ -186,16 +180,21 @@ pub trait Dispatch {
  */
 
 impl<T> Multiplex<T> where T: Dispatch {
-    /// Create a new pipeline `Multiplex` dispatcher with the given service and
-    /// transport
+    /// Create a new `Multiplex`
     pub fn new(dispatch: T) -> Multiplex<T> {
+        let config = MultiplexConfig::default();
+        Multiplex::new_configured(dispatch, &config)
+    }
+
+    /// Create a new `Multiplex` with the given configuration
+    pub fn new_configured(dispatch: T, config: &MultiplexConfig) -> Multiplex<T> {
         // Add `Sink` impl for `Dispatch`
         let dispatch = DispatchSink { inner: dispatch };
 
         // Add a single slot buffer for the sink
         let dispatch = BufferOne::new(dispatch);
 
-        let frame_buf = FrameBuf::with_capacity(MAX_BUFFERED_FRAMES);
+        let frame_buf = FrameBuf::with_capacity(config.max_buffered_frames);
 
         Multiplex {
             run: true,

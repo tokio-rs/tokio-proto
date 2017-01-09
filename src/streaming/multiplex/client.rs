@@ -1,4 +1,4 @@
-use super::{Frame, RequestId, StreamingMultiplex, Transport};
+use super::{Frame, RequestId, StreamingMultiplex, Transport, MultiplexConfig};
 use super::advanced::{Multiplex, MultiplexMessage};
 
 use BindClient;
@@ -48,6 +48,11 @@ pub trait ClientProto<T: 'static>: 'static {
     /// Build a transport from the given I/O object, using `self` for any
     /// configuration.
     fn bind_transport(&self, io: T) -> Self::BindTransport;
+
+    /// Returns the multiplex configuration values
+    fn multiplex_config(&self) -> MultiplexConfig {
+        MultiplexConfig::default()
+    }
 }
 
 impl<P, T, B> BindClient<StreamingMultiplex<B>, T> for P where
@@ -63,15 +68,17 @@ impl<P, T, B> BindClient<StreamingMultiplex<B>, T> for P where
 
     fn bind_client(&self, handle: &Handle, io: T) -> Self::BindClient {
         let (client, rx) = client_proxy::pair();
+        let multiplex_config = self.multiplex_config();
 
-        let task = self.bind_transport(io).into_future().and_then(|transport| {
+        let task = self.bind_transport(io).into_future().and_then(move |transport| {
             let dispatch: Dispatch<P, T, B> = Dispatch {
                 transport: transport,
                 requests: rx,
                 in_flight: HashMap::new(),
                 next_request_id: 0,
             };
-            Multiplex::new(dispatch)
+
+            Multiplex::new_configured(dispatch, &multiplex_config)
         }).map_err(|e| {
             // TODO: where to punt this error to?
             debug!("multiplex task failed with error; err={:?}", e);

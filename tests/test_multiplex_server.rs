@@ -10,7 +10,7 @@ extern crate rand;
 extern crate log;
 
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::cell::RefCell;
 use std::thread;
@@ -21,7 +21,7 @@ use futures::future;
 use futures::sync::oneshot;
 use futures::sync::mpsc;
 use tokio_proto::streaming::{Message, Body};
-use tokio_proto::streaming::multiplex::{Frame, RequestId};
+use tokio_proto::streaming::multiplex::{Frame, RequestId, MultiplexConfig};
 use rand::Rng;
 
 mod support;
@@ -426,14 +426,82 @@ fn test_interleaving_request_body_chunks() {
 }
 
 #[test]
+fn test_response_displacement() {
+    let mut config = MultiplexConfig::default();
+
+    // No response displacement. This pipelines response heads, but allows the
+    // response body to be multiplexed.
+    config.max_response_displacement(0);
+
+    let (tx1, rx1) = oneshot::channel();
+    let (tx2, rx2) = oneshot::channel();
+
+    let expect = Mutex::new(vec![
+        ("hello", rx1),
+        ("world", rx2),
+    ]);
+
+    let service = simple_service(move |req: Message<&'static str, Body<u32, io::Error>>| {
+        let (expect, resp) = expect.lock().unwrap().remove(0);
+        assert_eq!(req, expect);
+
+        Box::new(
+            resp.map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                .and_then(|resp| Ok(resp)))
+    });
+
+    let (mut mock, _other) = mock::configured_multiplex_server(service, config);
+
+    // Send two requests
+    mock.send(msg(0, "hello"));
+    mock.send(msg(1, "world"));
+
+    // First complete the second response
+    let (body2, rx2) = Body::pair();
+    tx2.complete(Message::WithBody("response 2", Box::new(rx2)));
+
+    // Wait a bit
+    thread::sleep(Duration::from_millis(250));
+
+    // Complete the first response
+    let (body1, rx1) = Body::pair();
+    tx1.complete(Message::WithBody("response 1", Box::new(rx1)));
+
+    // Assert the responses were pipelined
+    let wr = mock.next_write();
+    assert_eq!(0, wr.request_id());
+    assert_eq!("response 1", wr.unwrap_msg());
+
+    let wr = mock.next_write();
+    assert_eq!(1, wr.request_id());
+    assert_eq!("response 2", wr.unwrap_msg());
+
+    // Assert the response bodies are multiplexed
+    let _body2 = body2.send(Ok(123)).wait();
+
+    let wr = mock.next_write();
+    assert_eq!(1, wr.request_id());
+    assert_eq!(123, wr.unwrap_body().unwrap());
+
+    let _body1 = body1.send(Ok(456)).wait();
+
+    let wr = mock.next_write();
+    assert_eq!(0, wr.request_id());
+    assert_eq!(456, wr.unwrap_body().unwrap());
+}
+
+#[test]
+#[ignore]
 fn test_interleaving_response_body_chunks() {
 }
 
 #[test]
+#[ignore]
 fn test_transport_provides_invalid_request_ids() {
 }
 
 #[test]
+#[ignore]
 fn test_reaching_max_buffered_frames() {
 }
 
@@ -457,16 +525,13 @@ fn test_read_error_as_first_frame() {
 }
 
 #[test]
+#[ignore]
 fn test_read_error_during_stream() {
 }
 
 #[test]
+#[ignore]
 fn test_error_handling_before_message_dispatched() {
-    /*
-    let service = simple_service(|_| {
-        unimplemented!();
-    });
-    */
 }
 
 fn msg(id: RequestId, msg: &'static str) -> Frame<&'static str, u32, io::Error> {
