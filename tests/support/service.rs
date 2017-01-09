@@ -27,7 +27,7 @@ impl<T, U> Service for SimpleService<T, U> {
     type Future = Box<Future<Item=U, Error=io::Error> + Send>;
     type Error = io::Error;
 
-    fn call(&mut self, t: T) -> Self::Future {
+    fn call(&self, t: T) -> Self::Future {
         (self.inner)(t)
     }
 }

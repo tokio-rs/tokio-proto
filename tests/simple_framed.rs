@@ -85,7 +85,7 @@ impl Service for TestService {
     type Error = io::Error;
     type Future = BoxFuture<Self::Response, io::Error>;
 
-    fn call(&mut self, _: Self::Request) -> Self::Future {
+    fn call(&self, _: Self::Request) -> Self::Future {
         unimplemented!();
     }
 }

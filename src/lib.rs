@@ -155,7 +155,7 @@
 //!     type Error = io::Error;
 //!     type Future = BoxFuture<u64, io::Error>;
 //!
-//!     fn call(&mut self, req: u64) -> Self::Future {
+//!     fn call(&self, req: u64) -> Self::Future {
 //!         // Just return the request, doubled
 //!         future::finished(req * 2).boxed()
 //!     }

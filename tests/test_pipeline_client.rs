@@ -25,7 +25,7 @@ use support::mock;
 
 #[test]
 fn test_ping_pong_close() {
-    let (mut mock, mut service, _other) = mock::pipeline_client();
+    let (mut mock, service, _other) = mock::pipeline_client();
 
     let pong = service.call(Message::WithoutBody("ping"));
     assert_eq!("ping", mock.next_write().unwrap_msg());
@@ -38,7 +38,7 @@ fn test_ping_pong_close() {
 #[test]
 #[ignore]
 fn test_response_ready_before_request_sent() {
-    let (mut mock, mut service, _other) = mock::pipeline_client();
+    let (mut mock, service, _other) = mock::pipeline_client();
 
     mock.send(msg("pong"));
 
@@ -51,7 +51,7 @@ fn test_response_ready_before_request_sent() {
 
 #[test]
 fn test_streaming_request_body() {
-    let (mut mock, mut service, _other) = mock::pipeline_client();
+    let (mut mock, service, _other) = mock::pipeline_client();
 
     let (mut tx, rx) = mpsc::channel(1);
 
@@ -82,7 +82,7 @@ fn test_streaming_response_body() {
 #[test]
 fn test_streaming_client_dropped() {
     let (mut tx, mut mock, pong, _other) = {
-        let (mock, mut service, _other) = mock::pipeline_client();
+        let (mock, service, _other) = mock::pipeline_client();
 
         let (tx, rx) = mpsc::channel(1);
 
