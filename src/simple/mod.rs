@@ -1,6 +1,11 @@
 pub mod pipeline;
 pub mod multiplex;
 
+
+use std::marker::PhantomData;
+use futures::{Future, Poll, Async};
+use std::io;
+
 // A utility struct to enable "lifting" from an RPC to a streaming proto, which
 // is how RPC protos are implemented under the hood. Unfortunately:
 //
@@ -23,5 +28,36 @@ impl<P> LiftProto<P> {
 
     fn lower(&self) -> &P {
         &self.0
+    }
+}
+
+trait FromTransport<T> {
+    fn from_transport(T) -> Self;
+}
+
+// Lifts the Bind from the underlying transport
+struct LiftBind<F, A> {
+    fut: F,
+    marker: PhantomData<A>,
+}
+
+impl<F, A> LiftBind<F, A> {
+    pub fn lift(f: F) -> LiftBind<F, A> {
+        LiftBind {
+            fut: f,
+            marker: PhantomData,
+        }
+    }
+}
+
+impl<F, A> Future for LiftBind<F, A> where
+    F: Future<Error = io::Error>,
+    A: FromTransport<F::Item>,
+{
+    type Item = A;
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, io::Error> {
+        Ok(Async::Ready(A::from_transport(try_ready!(self.fut.poll()))))
     }
 }

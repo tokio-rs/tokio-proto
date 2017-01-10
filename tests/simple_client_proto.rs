@@ -27,13 +27,13 @@ fn parse_u64(from: &[u8]) -> Result<u64, io::Error> {
 }
 
 impl Codec for IntCodec {
-    type In = u64;
+    type In = Result<u64, io::Error>;
     type Out = u64;
 
     // Attempt to decode a message from the given buffer if a complete
     // message is available; returns `Ok(None)` if the buffer does not yet
     // hold a complete message.
-    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<u64>, io::Error> {
+    fn decode(&mut self, buf: &mut EasyBuf) -> Result<Option<io::Result<u64>>, io::Error> {
         if let Some(i) = buf.as_slice().iter().position(|&b| b == b'\n') {
             // remove the line, including the '\n', from the buffer
             let full_line = buf.drain_to(i + 1);
@@ -41,7 +41,7 @@ impl Codec for IntCodec {
             // strip the'`\n'
             let slice = &full_line.as_slice()[..i];
 
-            Ok(Some(parse_u64(slice)?))
+            Ok(Some(Ok(parse_u64(slice)?)))
         } else {
             Ok(None)
         }
@@ -49,9 +49,9 @@ impl Codec for IntCodec {
 
     // Attempt to decode a message assuming that the given buffer contains
     // *all* remaining input data.
-    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<u64> {
+    fn decode_eof(&mut self, buf: &mut EasyBuf) -> io::Result<io::Result<u64>> {
         let amt = buf.len();
-        Ok(parse_u64(buf.drain_to(amt).as_slice())?)
+        Ok(Ok(parse_u64(buf.drain_to(amt).as_slice())?))
     }
 
     fn encode(&mut self, item: u64, into: &mut Vec<u8>) -> io::Result<()> {
