@@ -1,12 +1,13 @@
 use BindClient;
 use super::Pipeline;
-use simple::{LiftProto, LiftBind, FromTransport};
+use super::lift::{LiftBind, LiftTransport};
+use simple::LiftProto;
 
-use streaming::{Message};
-use streaming::pipeline::{self, Frame, StreamingPipeline};
+use streaming::{self, Message};
+use streaming::pipeline::StreamingPipeline;
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
-use futures::{stream, Stream, Sink, Future, Poll, IntoFuture, StartSend, AsyncSink};
+use futures::{stream, Stream, Sink, Future, Poll, IntoFuture};
 use std::io;
 
 type MyStream<E> = stream::Empty<(), E>;
@@ -35,7 +36,7 @@ pub trait ClientProto<T: 'static>: 'static {
     /// together with a `Codec`; in that case, the transport type is
     /// `Framed<T, YourCodec>`. See the crate docs for an example.
     type Transport: 'static +
-        Stream<Item = Result<Self::Response, Self::Error>, Error = io::Error> +
+        Stream<Item = Self::Response, Error = io::Error> +
         Sink<SinkItem = Self::Request, SinkError = io::Error>;
 
     /// A future for initializing a transport from an I/O object.
@@ -68,7 +69,7 @@ impl<T: 'static, P: ClientProto<T>> BindClient<Pipeline, T> for P {
     }
 }
 
-impl<T, P> pipeline::ClientProto<T> for LiftProto<P> where
+impl<T, P> streaming::pipeline::ClientProto<T> for LiftProto<P> where
     T: 'static, P: ClientProto<T>
 {
     type Request = P::Request;
@@ -79,49 +80,11 @@ impl<T, P> pipeline::ClientProto<T> for LiftProto<P> where
 
     type Error = P::Error;
 
-    type Transport = LiftTransport<T, P>;
-    type BindTransport = LiftBind<<P::BindTransport as IntoFuture>::Future, Self::Transport>;
+    type Transport = LiftTransport<P::Transport, P::Error>;
+    type BindTransport = LiftBind<T, <P::BindTransport as IntoFuture>::Future, P::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
         LiftBind::lift(ClientProto::bind_transport(self.lower(), io).into_future())
-    }
-}
-
-// Lifts an implementation of RPC-style transport to streaming-style transport
-pub struct LiftTransport<T: 'static, P: ClientProto<T>>(P::Transport);
-
-impl<T: 'static, P: ClientProto<T>> Stream for LiftTransport<T, P> {
-    type Item = Frame<P::Response, (), P::Error>;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, io::Error> {
-        Ok(try_ready!(self.0.poll()).map(super::lift_msg_result).into())
-    }
-}
-
-impl<T: 'static, P: ClientProto<T>> Sink for LiftTransport<T, P> {
-    type SinkItem = Frame<P::Request, (), P::Error>;
-    type SinkError = io::Error;
-
-    fn start_send(&mut self, msg: Self::SinkItem) -> StartSend<Self::SinkItem, io::Error> {
-        match try!(self.0.start_send(super::lower_msg(msg))) {
-            AsyncSink::Ready => Ok(AsyncSink::Ready),
-            AsyncSink::NotReady(msg) => {
-                Ok(AsyncSink::NotReady(super::lift_msg(msg)))
-            }
-        }
-    }
-
-    fn poll_complete(&mut self) -> Poll<(), io::Error> {
-        self.0.poll_complete()
-    }
-}
-
-impl<T: 'static, P: ClientProto<T>> pipeline::Transport for LiftTransport<T, P> {}
-
-impl<T: 'static, P: ClientProto<T>> FromTransport<P::Transport> for LiftTransport<T, P> {
-    fn from_transport(transport: P::Transport) -> LiftTransport<T, P> {
-        LiftTransport(transport)
     }
 }
 

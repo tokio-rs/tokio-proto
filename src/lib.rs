@@ -97,7 +97,7 @@
 //!
 //! impl Codec for IntCodec {
 //!     type In = u64;
-//!     type Out = io::Result<u64>;
+//!     type Out = u64;
 //!
 //!     // Attempt to decode a message from the given buffer if a complete
 //!     // message is available; returns `Ok(None)` if the buffer does not yet
@@ -123,8 +123,8 @@
 //!         Ok(parse_u64(buf.drain_to(amt).as_slice())?)
 //!     }
 //!
-//!     fn encode(&mut self, item: io::Result<u64>, into: &mut Vec<u8>) -> io::Result<()> {
-//!         writeln!(into, "{}", item.unwrap());
+//!     fn encode(&mut self, item: u64, into: &mut Vec<u8>) -> io::Result<()> {
+//!         writeln!(into, "{}", item);
 //!         Ok(())
 //!     }
 //! }
