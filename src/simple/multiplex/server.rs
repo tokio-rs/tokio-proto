@@ -29,9 +29,6 @@ pub trait ServerProto<T: 'static>: 'static {
     /// Response messages.
     type Response: 'static;
 
-    /// Errors produced by the service.
-    type Error: From<io::Error> + 'static;
-
     /// The message transport, which usually take `T` as a parameter.
     ///
     /// An easy way to build a transport is to use `tokio_core::io::Framed`
@@ -58,14 +55,14 @@ pub trait ServerProto<T: 'static>: 'static {
 impl<T: 'static, P: ServerProto<T>> BindServer<Multiplex, T> for P {
     type ServiceRequest = P::Request;
     type ServiceResponse = P::Response;
-    type ServiceError = P::Error;
+    type ServiceError = io::Error;
 
     fn bind_server<S>(&self, handle: &Handle, io: T, service: S)
         where S: Service<Request = Self::ServiceRequest,
                          Response = Self::ServiceResponse,
                          Error = Self::ServiceError> + 'static
     {
-        BindServer::<StreamingMultiplex<MyStream<P::Error>>, T>::bind_server(
+        BindServer::<StreamingMultiplex<MyStream<io::Error>>, T>::bind_server(
             LiftProto::from_ref(self), handle, io, LiftService(service)
         )
     }
@@ -80,10 +77,10 @@ impl<T, P> streaming::multiplex::ServerProto<T> for LiftProto<P> where
     type Response = P::Response;
     type ResponseBody = ();
 
-    type Error = P::Error;
+    type Error = io::Error;
 
-    type Transport = LiftTransport<P::Transport, P::Error>;
-    type BindTransport = LiftBind<T, <P::BindTransport as IntoFuture>::Future, P::Error>;
+    type Transport = LiftTransport<P::Transport, io::Error>;
+    type BindTransport = LiftBind<T, <P::BindTransport as IntoFuture>::Future, io::Error>;
 
     fn bind_transport(&self, io: T) -> Self::BindTransport {
         LiftBind::lift(ServerProto::bind_transport(self.lower(), io).into_future())
