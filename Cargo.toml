@@ -30,8 +30,7 @@ smallvec = "0.2.0"
 futures = "0.1.6"
 tokio-core = "0.1.1"
 net2 = "0.2"
-
-tokio-service = { git = "https://github.com/tokio-rs/tokio-service" }
+tokio-service = "0.1"
 
 [dev-dependencies]
 env_logger = "0.3.0"
