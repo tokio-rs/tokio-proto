@@ -1,6 +1,9 @@
 //! This library provides a toolkit for rapid protocol development and usage,
 //! working with the rest of the Tokio stack.
 //!
+//! You can find extensive documentation and tutorials in addition to this
+//! documentation at [https://tokio.rs](https://tokio.rs)
+//!
 //! # Protocols
 //!
 //! Here, a **protocol** is a way of providing or consuming a service. Protocols
@@ -168,6 +171,7 @@
 //! }
 //! ```
 
+#![doc(html_root_url = "https://docs.rs/tokio-proto/0.1")]
 #![deny(warnings, missing_docs)]
 #![allow(deprecated)] // TODO remove this
 

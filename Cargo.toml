@@ -9,8 +9,8 @@ A network application framework for rapid development and highly scalable
 production deployments of clients and servers.
 """
 
-documentation = "http://rust-doc.s3-website-us-east-1.amazonaws.com/tokio/master/tokio"
-homepage      = "https://github.com/tokio-rs/tokio-proto"
+documentation = "https://docs.rs/tokio-proto/0.1"
+homepage      = "https://tokio.rs"
 repository    = "https://github.com/tokio-rs/tokio-proto"
 readme        = "README.md"
 keywords      = [ "io", "async", "non-blocking", "futures" ]

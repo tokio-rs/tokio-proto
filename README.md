@@ -5,8 +5,9 @@ highly scalable production deployments of clients and servers.
 
 [![Build Status](https://travis-ci.org/tokio-rs/tokio-proto.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-proto)
 
-[Documentation](https://tokio-rs.github.io/tokio-proto) |
-[Gitter](https://gitter.im/tokio-rs/tokio)
+[Documentation](https://docs.rs/tokio-proto) |
+[Gitter](https://gitter.im/tokio-rs/tokio) |
+[Tutorial](https://tokio.rs)
 
 ## Usage
 
@@ -23,34 +24,13 @@ Next, add this to your crate:
 extern crate tokio_proto;
 ```
 
-And then, use Tokio!
+You can find extensive examples and tutorials at
+[https://tokio.rs](https://tokio.rs).
 
 ## Getting Help
+
 If you have questions or need further help getting started, consider joining
 the chat in our [Gitter Channel](http://gitter.im/tokio-rs/tokio).
-
-## Built with Tokio
-
-**[Tokio Line](https://github.com/tokio-rs/tokio-line)**
-
-An example of how to implement a client and server with Tokio. The
-protocol consists of UTF-8 strings where messages are `\n` terminated.
-
-**[Tokio Hyper](https://github.com/tokio-rs/tokio-hyper)**
-
-A Tokio HTTP server built on top of Hyper. Full Tokio integration is
-coming to Hyper in version 0.10.
-
-**[Tokio Redis](https://github.com/tokio-rs/tokio-redis)**
-
-A basic Redis client built with Tokio.
-
-## Related Articles
-
-If you're interested in building with Tokio you may want to check out the following articles:
-
-* [Introduction to Futures](http://aturon.github.io/blog/2016/08/11/futures/) which this crate is based on.
-* [Carl's Introduction to Tokio](https://medium.com/@carllerche/announcing-tokio-df6bb4ddb34#.s2jti29o3) to the crate.
 
 ## License
 
