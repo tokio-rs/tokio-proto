@@ -426,14 +426,17 @@ fn test_interleaving_request_body_chunks() {
 }
 
 #[test]
+#[ignore]
 fn test_interleaving_response_body_chunks() {
 }
 
 #[test]
+#[ignore]
 fn test_transport_provides_invalid_request_ids() {
 }
 
 #[test]
+#[ignore]
 fn test_reaching_max_buffered_frames() {
 }
 
@@ -457,16 +460,13 @@ fn test_read_error_as_first_frame() {
 }
 
 #[test]
+#[ignore]
 fn test_read_error_during_stream() {
 }
 
 #[test]
+#[ignore]
 fn test_error_handling_before_message_dispatched() {
-    /*
-    let service = simple_service(|_| {
-        unimplemented!();
-    });
-    */
 }
 
 fn msg(id: RequestId, msg: &'static str) -> Frame<&'static str, u32, io::Error> {
