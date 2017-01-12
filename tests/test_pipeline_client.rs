@@ -109,7 +109,7 @@ fn test_streaming_client_dropped() {
 
 #[test]
 fn test_streaming_client_transport_dropped() {
-    let (mut mock, mut service, _) = mock::pipeline_client();
+    let (mut mock, service, _) = mock::pipeline_client();
     let pong = service.call(Message::WithoutBody("ping"));
 
     assert_eq!(pong.wait().unwrap_err().kind(), io::ErrorKind::BrokenPipe);

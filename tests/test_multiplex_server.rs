@@ -144,7 +144,7 @@ fn test_out_of_order_multiplexing() {
 
     let service = simple_service(move |_| {
         let (c, fut) = oneshot::channel();
-        (&mut tx.clone()).send(c).unwrap();
+        mpsc::UnboundedSender::send(&mut tx.clone(), c).unwrap();
         fut.then(|r| r.unwrap())
     });
 
@@ -185,7 +185,7 @@ fn test_multiplexing_while_transport_not_writable() {
     let (tx, rx) = mpsc::unbounded();
 
     let service = simple_service(move |req: Message<&'static str, Body<u32, io::Error>>| {
-        (&mut tx.clone()).send(req.clone()).unwrap();
+        mpsc::UnboundedSender::send(&mut tx.clone(), req.clone()).unwrap();
         future::ok(Message::WithoutBody(*req.get_ref()))
     });
 
@@ -241,7 +241,7 @@ fn test_reaching_max_in_flight_requests() {
     let (mut mock, _other) = mock::multiplex_server(service);
     for i in 0..33 {
         let (c, resp) = oneshot::channel();
-        (&mut tx).send(resp).unwrap();
+        mpsc::UnboundedSender::send(&mut tx, resp).unwrap();
         responses.push((i, c));
         mock.send(msg(i, "request"));
     }
@@ -335,7 +335,7 @@ fn test_basic_streaming_request_body_read_then_respond() {
         let mut tx = tx.clone();
 
         body.for_each(move |chunk| {
-            (&mut tx).send(chunk).unwrap();
+            mpsc::UnboundedSender::send(&mut tx, chunk).unwrap();
             Ok(())
         }).and_then(|_| {
             Ok(Message::WithoutBody("hi2u"))
@@ -378,7 +378,7 @@ fn test_interleaving_request_body_chunks() {
         assert_eq!(req, &format!("have-body-{}", i));
 
         body.for_each(move |chunk| {
-            (&mut tx).send((i, chunk)).unwrap();
+            mpsc::UnboundedSender::send(&mut tx, (i, chunk)).unwrap();
             Ok(())
         }).and_then(|_| {
             Ok(Message::WithoutBody("hi2u"))
