@@ -9,10 +9,10 @@
 //! Here, a **protocol** is a way of providing or consuming a service. Protocols
 //! are implemented via traits, which are arranged into a taxonomy:
 //!
-//! - `pipeline::{Client, Server}`
-//! - `multiplex::{Client, Server}`
-//! - `streaming::pipeline::{Client, Server}`
-//! - `streaming::multiplex::{Client, Server}`
+//! - `pipeline::{ClientProto, ServerProto}`
+//! - `multiplex::{ClientProto, ServerProto}`
+//! - `streaming::pipeline::{ClientProto, ServerProto}`
+//! - `streaming::multiplex::{ClientProto, ServerProto}`
 //!
 //! ### Pipeline vs multiplex
 //!
@@ -212,10 +212,10 @@ mod buffer_one;
 /// This trait is not intended to be implemented directly; instead, implement
 /// one of the server protocol traits:
 ///
-/// - `pipeline::Server`
-/// - `multiplex::Server`
-/// - `streaming::pipeline::Server`
-/// - `streaming::multiplex::Server`
+/// - `pipeline::ServerProto`
+/// - `multiplex::ServerProto`
+/// - `streaming::pipeline::ServerProto`
+/// - `streaming::multiplex::ServerProto`
 ///
 /// See the crate documentation for more details on those traits.
 ///
@@ -248,10 +248,10 @@ pub trait BindServer<Kind, T: 'static>: 'static {
 /// This trait is not intended to be implemented directly; instead, implement
 /// one of the server protocol traits:
 ///
-/// - `pipeline::Client`
-/// - `multiplex::Client`
-/// - `streaming::pipeline::Client`
-/// - `streaming::multiplex::Client`
+/// - `pipeline::ClientProto`
+/// - `multiplex::ClientProto`
+/// - `streaming::pipeline::ClientProto`
+/// - `streaming::multiplex::ClientProto`
 ///
 /// See the crate documentation for more details on those traits.
 ///
