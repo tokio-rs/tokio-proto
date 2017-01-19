@@ -228,6 +228,6 @@ fn configure_tcp(workers: usize, tcp: &net2::TcpBuilder) -> io::Result<()> {
 }
 
 #[cfg(windows)]
-fn configure_tcp(workers: usize, _tcp: &net2::TcpBuilder) -> io::Result<()> {
+fn configure_tcp(_workers: usize, _tcp: &net2::TcpBuilder) -> io::Result<()> {
     Ok(())
 }
