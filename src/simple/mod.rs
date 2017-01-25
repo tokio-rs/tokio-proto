@@ -5,7 +5,7 @@ pub mod multiplex;
 // is how RPC protos are implemented under the hood. Unfortunately:
 //
 // - Having a blanket impl that lifts *directly* from
-//   e.g. rpc::pipeline::ServerProto to streaming::pipeline::ServerProto causes
+//   e.g. simple::pipeline::ServerProto to streaming::pipeline::ServerProto causes
 //   inference problems, so we need a newtype.
 //
 // - We can't do `LiftProto<'a, P: 'a>(&'a P)` because of the `'static` requirement,

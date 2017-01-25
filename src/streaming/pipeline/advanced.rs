@@ -189,7 +189,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                 }
             }
             None => {
-                trace!("read Frame::Done");
+                trace!("read None");
                 // At this point, we just return. This works
                 // because tick() will be called again and go
                 // through the read-cycle again.
@@ -383,8 +383,8 @@ impl<T> Future for Pipeline<T> where T: Dispatch {
 
         // Clean shutdown of the pipeline server can happen when
         //
-        // 1. The server is done running, this is signaled by Transport::read()
-        //    returning Frame::Done.
+        // 1. The server is done running, this is signaled by Transport::poll()
+        //    returning None.
         //
         // 2. The transport is done writing all data to the socket, this is
         //    signaled by Transport::flush() returning Ok(Some(())).

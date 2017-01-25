@@ -314,7 +314,7 @@ impl<T> Multiplex<T> where T: Dispatch {
                 try!(self.process_out_err(id, error));
             }
             None => {
-                trace!("read Frame::Done");
+                trace!("read None");
                 // TODO: Ensure all bodies have been completed
                 self.run = false;
             }
@@ -776,8 +776,8 @@ impl<T> Future for Multiplex<T>
 
         // Clean shutdown of the pipeline server can happen when
         //
-        // 1. The server is done running, this is signaled by Transport::read()
-        //    returning Frame::Done.
+        // 1. The server is done running, this is signaled by Transport::poll()
+        //    returning None.
         //
         // 2. The transport is done writing all data to the socket, this is
         //    signaled by Transport::flush() returning Ok(Some(())).
