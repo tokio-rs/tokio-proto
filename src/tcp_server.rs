@@ -6,10 +6,11 @@ use std::thread;
 
 use BindServer;
 use futures::stream::Stream;
+use futures::future::{Then, Future};
 use net2;
 use tokio_core::net::{TcpStream, TcpListener};
 use tokio_core::reactor::{Core, Handle};
-use tokio_service::NewService;
+use tokio_service::{NewService, Service};
 
 // TODO: Add more options, e.g.:
 // - max concurrent requests
@@ -80,9 +81,14 @@ impl<Kind, P> TcpServer<Kind, P> where
     ///
     /// This method will block the current thread until the server is shut down.
     pub fn serve<S>(&self, new_service: S) where
-        S: NewService<Request = P::ServiceRequest,
-                      Response = P::ServiceResponse,
-                      Error = P::ServiceError> + Send + Sync + 'static,
+        S: NewService + Send + Sync + 'static,
+        S::Instance: 'static,
+        P::ServiceError: 'static,
+        P::ServiceResponse: 'static,
+        P::ServiceRequest: 'static,
+        S::Request: From<P::ServiceRequest>,
+        S::Response: Into<P::ServiceResponse>,
+        S::Error: Into<P::ServiceError>,
     {
         let new_service = Arc::new(new_service);
         self.with_handle(move |_| new_service.clone())
@@ -98,9 +104,14 @@ impl<Kind, P> TcpServer<Kind, P> where
     /// This method will block the current thread until the server is shut down.
     pub fn with_handle<F, S>(&self, new_service: F) where
         F: Fn(&Handle) -> S + Send + Sync + 'static,
-        S: NewService<Request = P::ServiceRequest,
-                      Response = P::ServiceResponse,
-                      Error = P::ServiceError> + Send + Sync + 'static,
+        S: NewService + Send + Sync + 'static,
+        S::Instance: 'static,
+        P::ServiceError: 'static,
+        P::ServiceResponse: 'static,
+        P::ServiceRequest: 'static,
+        S::Request: From<P::ServiceRequest>,
+        S::Response: Into<P::ServiceResponse>,
+        S::Error: Into<P::ServiceError>,
     {
         let proto = self.proto.clone();
         let new_service = Arc::new(new_service);
@@ -127,10 +138,48 @@ impl<Kind, P> TcpServer<Kind, P> where
 fn serve<P, Kind, F, S>(binder: Arc<P>, addr: SocketAddr, workers: usize, new_service: &F)
     where P: BindServer<Kind, TcpStream>,
           F: Fn(&Handle) -> S,
-          S: NewService<Request = P::ServiceRequest,
-                        Response = P::ServiceResponse,
-                        Error = P::ServiceError> + 'static,
+          S: NewService + Send + Sync,
+          S::Instance: 'static,
+          P::ServiceError: 'static,
+          P::ServiceResponse: 'static,
+          P::ServiceRequest: 'static,
+          S::Request: From<P::ServiceRequest>,
+          S::Response: Into<P::ServiceResponse>,
+          S::Error: Into<P::ServiceError>,
 {
+    struct WrapService<S, Request, Response, Error> {
+        inner: S,
+        _marker: PhantomData<fn() -> (Request, Response, Error)>,
+    }
+
+    impl<S, Request, Response, Error> Service for WrapService<S, Request, Response, Error>
+        where S: Service,
+              S::Request: From<Request>,
+              S::Response: Into<Response>,
+              S::Error: Into<Error>,
+    {
+        type Request = Request;
+        type Response = Response;
+        type Error = Error;
+        type Future = Then<S::Future,
+                           Result<Response, Error>,
+                           fn(Result<S::Response, S::Error>) -> Result<Response, Error>>;
+
+        fn call(&self, req: Request) -> Self::Future {
+            fn change_types<A, B, C, D>(r: Result<A, B>) -> Result<C, D>
+                where A: Into<C>,
+                      B: Into<D>,
+            {
+                match r {
+                    Ok(e) => Ok(e.into()),
+                    Err(e) => Err(e.into()),
+                }
+            }
+
+            self.inner.call(S::Request::from(req)).then(change_types)
+        }
+    }
+
     let mut core = Core::new().unwrap();
     let handle = core.handle();
     let new_service = new_service(&handle);
@@ -141,7 +190,10 @@ fn serve<P, Kind, F, S>(binder: Arc<P>, addr: SocketAddr, workers: usize, new_se
         let service = try!(new_service.new_service());
 
         // Bind it!
-        binder.bind_server(&handle, socket, service);
+        binder.bind_server(&handle, socket, WrapService {
+            inner: service,
+            _marker: PhantomData,
+        });
 
         Ok(())
     });
