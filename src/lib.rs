@@ -48,7 +48,7 @@
 //! # Transports
 //!
 //! A key part of any protocol is its **transport**, which is the way that it
-//! sends and received *frames* on its connection. For simple protocols, these
+//! sends and receives *frames* on its connection. For simple protocols, these
 //! frames correspond directly to complete requests and responses. For more
 //! complicated protocols, they carry additional metadata, and may only be one
 //! part of a request or response body.
