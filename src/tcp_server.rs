@@ -99,7 +99,7 @@ impl<Kind, P> TcpServer<Kind, P> where
     ///
     /// The `new_service` argument is a closure that is given an event loop
     /// handle, and produces a value implementing `NewService`. That value is in
-    /// turned used to make a new service instance for each incoming connection.
+    /// turn used to make a new service instance for each incoming connection.
     ///
     /// This method will block the current thread until the server is shut down.
     pub fn with_handle<F, S>(&self, new_service: F) where
