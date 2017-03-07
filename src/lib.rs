@@ -172,7 +172,7 @@
 //! ```
 
 #![doc(html_root_url = "https://docs.rs/tokio-proto/0.1")]
-#![deny(warnings, missing_docs)]
+#![deny(warnings, missing_docs, missing_debug_implementations)]
 #![allow(deprecated)] // TODO remove this
 
 extern crate net2;

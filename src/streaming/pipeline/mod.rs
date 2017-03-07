@@ -21,6 +21,7 @@ pub mod advanced;
 ///
 /// This is an implementation detail; to actually implement a protocol,
 /// implement the `ClientProto` or `ServerProto` traits in this module.
+#[derive(Debug)]
 pub struct StreamingPipeline<B>(B);
 
 /// Additional transport details relevant to streaming, pipelined protocols.

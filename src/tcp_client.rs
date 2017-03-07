@@ -1,4 +1,4 @@
-use std::io;
+use std::{fmt, io};
 use std::sync::Arc;
 use std::net::SocketAddr;
 use std::marker::PhantomData;
@@ -23,6 +23,7 @@ use futures::{Future, Poll, Async};
 ///
 /// At the moment, this builder offers minimal configuration, but more will be
 /// added over time.
+#[derive(Debug)]
 pub struct TcpClient<Kind, P> {
     _kind: PhantomData<Kind>,
     proto: Arc<P>,
@@ -74,5 +75,11 @@ impl<Kind, P> TcpClient<Kind, P> where P: BindClient<Kind, TcpStream> {
             socket: TcpStream::connect(addr, handle),
             handle: handle.clone(),
         }
+    }
+}
+
+impl<Kind, P> fmt::Debug for Connect<Kind, P> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Connect {{ ... }}")
     }
 }

@@ -16,7 +16,7 @@ use tokio_service::Service;
 use futures::{Future, Async, Poll, Stream, AsyncSink, Sink};
 use futures::sync::mpsc;
 use futures::sync::oneshot;
-use std::io;
+use std::{fmt, io};
 use std::cell::RefCell;
 
 /// Client `Service` for pipeline or multiplex protocols
@@ -31,7 +31,6 @@ impl<R, S, E> Clone for ClientProxy<R, S, E> {
         }
     }
 }
-
 /// Response future returned from a client
 pub struct Response<T, E> {
     inner: oneshot::Receiver<Result<T, E>>,
@@ -81,6 +80,16 @@ impl<R, S, E: From<io::Error>> Service for ClientProxy<R, S, E> {
     }
 }
 
+impl<R, S, E> fmt::Debug for ClientProxy<R, S, E>
+    where R: fmt::Debug,
+          S: fmt::Debug,
+          E: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientProxy {{ ... }}")
+    }
+}
+
 impl<T, E> Future for Response<T, E>
     where E: From<io::Error>,
 {
@@ -97,5 +106,14 @@ impl<T, E> Future for Response<T, E>
                 Err(e.into())
             }
         }
+    }
+}
+
+impl<T, E> fmt::Debug for Response<T, E>
+    where T: fmt::Debug,
+          E: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Response {{ ... }}")
     }
 }

@@ -16,6 +16,7 @@ pub type RequestId = u64;
 ///
 /// This is an implementation detail; to actually implement a protocol,
 /// implement the `ClientProto` or `ServerProto` traits in this module.
+#[derive(Debug)]
 pub struct Multiplex;
 
 // This is a submodule so that `LiftTransport` can be marked `pub`, to satisfy

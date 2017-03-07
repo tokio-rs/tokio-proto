@@ -8,7 +8,7 @@ use streaming::pipeline::StreamingPipeline;
 use tokio_core::reactor::Handle;
 use tokio_service::Service;
 use futures::{stream, Stream, Sink, Future, Poll, IntoFuture};
-use std::io;
+use std::{fmt, io};
 
 type MyStream<E> = stream::Empty<(), E>;
 
@@ -111,6 +111,15 @@ impl<T, P> Service for ClientService<T, P> where T: 'static, P: ClientProto<T> {
     }
 }
 
+impl<T, P> fmt::Debug for ClientService<T, P>
+    where T: 'static + fmt::Debug,
+          P: ClientProto<T> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientService {{ ... }}")
+    }
+}
+
 pub struct ClientFuture<T, P> where T: 'static, P: ClientProto<T> {
     inner: <<LiftProto<P> as BindClient<StreamingPipeline<MyStream<io::Error>>, T>>::BindClient
             as Service>::Future
@@ -125,5 +134,14 @@ impl<T, P> Future for ClientFuture<T, P> where P: ClientProto<T> {
             Message::WithoutBody(msg) => Ok(msg.into()),
             Message::WithBody(..) => panic!("bodies not supported"),
         }
+    }
+}
+
+impl<T, P> fmt::Debug for ClientFuture<T, P>
+    where T: 'static + fmt::Debug,
+          P: ClientProto<T> + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientFuture {{ ... }}")
     }
 }
