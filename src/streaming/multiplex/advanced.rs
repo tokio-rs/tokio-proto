@@ -10,7 +10,7 @@ use futures::sync::mpsc;
 use futures::{Future, Poll, Async, Stream, Sink, AsyncSink, StartSend};
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
-use std::io;
+use std::{fmt, io};
 use super::frame_buf::{FrameBuf, FrameDeque};
 use super::{Frame, RequestId, Transport};
 use buffer_one::BufferOne;
@@ -72,6 +72,31 @@ pub struct Multiplex<T> where T: Dispatch {
     scratch: Vec<RequestId>,
 }
 
+impl<T> fmt::Debug for Multiplex<T>
+    where T: Dispatch + fmt::Debug,
+          T::In: fmt::Debug,
+          T::Out: fmt::Debug,
+          T::BodyIn: fmt::Debug,
+          T::BodyOut: fmt::Debug,
+          T::Error: fmt::Debug,
+          T::Stream: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Multiplex")
+            .field("run", &self.run)
+            .field("made_progress", &self.made_progress)
+            .field("blocked_on_dispatch", &self.blocked_on_dispatch)
+            .field("dispatch", &self.dispatch)
+            .field("exhanges", &self.exchanges)
+            .field("is_flushed", &self.is_flushed)
+            .field("dispatch_deque", &self.dispatch_deque)
+            .field("frame_buf", &"FrameBuf { ... }")
+            .field("scratch", &self.scratch)
+            .finish()
+    }
+}
+
+#[derive(Debug)]
 struct DispatchSink<T> {
     inner: T,
 }
@@ -113,6 +138,7 @@ struct Exchange<T: Dispatch> {
     in_body: Option<T::Stream>,
 }
 
+#[derive(Debug)]
 enum Request<T: Dispatch> {
     In, // TODO: Handle inbound message buffering?
     Out(Option<Message<T::Out, Body<T::BodyOut, T::Error>>>),
@@ -126,6 +152,7 @@ enum WriteState {
 }
 
 /// Message used to communicate through the multiplex dispatch
+#[derive(Debug)]
 pub struct MultiplexMessage<T, B, E> {
     /// Request ID
     pub id: RequestId,
@@ -994,6 +1021,27 @@ impl<T: Dispatch> Exchange<T> {
         self.out_body = None;
 
         Ok(())
+    }
+}
+
+impl<T> fmt::Debug for Exchange<T>
+    where T: Dispatch + fmt::Debug,
+          T::In: fmt::Debug,
+          T::Out: fmt::Debug,
+          T::BodyIn: fmt::Debug,
+          T::BodyOut: fmt::Debug,
+          T::Error: fmt::Debug,
+          T::Stream: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Exchange")
+            .field("request", &self.request)
+            .field("responded", &self.responded)
+            .field("out_body", &"Sender { ... }")
+            .field("out_deque", &"FrameDeque { ... }")
+            .field("out_is_ready", &self.out_is_ready)
+            .field("in_body", &self.in_body)
+            .finish()
     }
 }
 

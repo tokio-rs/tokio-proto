@@ -32,6 +32,7 @@ use tokio_service::{NewService, Service};
 /// configuration, which is expected to grow over time.
 ///
 /// See the crate docs for an example.
+#[derive(Debug)]
 pub struct TcpServer<Kind, P> {
     _kind: PhantomData<Kind>,
     proto: Arc<P>,

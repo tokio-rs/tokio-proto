@@ -27,6 +27,7 @@ pub type RequestId = u64;
 ///
 /// This is an implementation detail; to actually implement a protocol,
 /// implement the `ClientProto` or `ServerProto` traits in this module.
+#[derive(Debug)]
 pub struct StreamingMultiplex<B>(B);
 
 /// Additional transport details relevant to streaming, multiplexed protocols.

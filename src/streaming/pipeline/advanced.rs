@@ -7,7 +7,7 @@
 
 use futures::sync::mpsc;
 use futures::{Future, Poll, Async, Stream, Sink, AsyncSink, StartSend};
-use std::io;
+use std::{fmt, io};
 use streaming::{Message, Body};
 use super::{Frame, Transport};
 use buffer_one::BufferOne;
@@ -403,6 +403,25 @@ impl<T> Future for Pipeline<T> where T: Dispatch {
     }
 }
 
+impl<T> fmt::Debug for Pipeline<T>
+    where T: Dispatch + fmt::Debug,
+          T::In: fmt::Debug,
+          T::BodyIn: fmt::Debug,
+          T::BodyOut: fmt::Debug,
+          T::Error: fmt::Debug,
+          T::Stream: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("Pipeline")
+            .field("run", &self.run)
+            .field("dispatch", &self.dispatch)
+            .field("out_body", &"Sender { ... }")
+            .field("in_body", &self.in_body)
+            .field("is_flushed", &self.is_flushed)
+            .finish()
+    }
+}
+
 impl<T: Dispatch> Sink for DispatchSink<T> {
     type SinkItem = <T::Transport as Sink>::SinkItem;
     type SinkError = io::Error;
@@ -415,6 +434,14 @@ impl<T: Dispatch> Sink for DispatchSink<T> {
 
     fn poll_complete(&mut self) -> Poll<(), io::Error> {
         self.inner.transport().poll_complete()
+    }
+}
+
+impl<T: fmt::Debug> fmt::Debug for DispatchSink<T> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("DispatchSink")
+            .field("inner", &self.inner)
+            .finish()
     }
 }
 

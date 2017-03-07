@@ -3,7 +3,7 @@ use super::{RequestId, Multiplex};
 use super::lift::{LiftBind, LiftTransport};
 use simple::LiftProto;
 
-use std::io;
+use std::{fmt, io};
 
 use streaming::{self, Message};
 use streaming::multiplex::StreamingMultiplex;
@@ -112,6 +112,15 @@ impl<T, P> Clone for ClientService<T, P> where T: 'static, P: ClientProto<T> {
     }
 }
 
+impl<T, P> fmt::Debug for ClientService<T, P>
+    where T: 'static + fmt::Debug,
+          P: ClientProto<T> + fmt::Debug
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientService {{ ... }}")
+    }
+}
+
 pub struct ClientFuture<T, P> where T: 'static, P: ClientProto<T> {
     inner: <<LiftProto<P> as BindClient<StreamingMultiplex<MyStream<io::Error>>, T>>::BindClient
             as Service>::Future
@@ -126,5 +135,14 @@ impl<T, P> Future for ClientFuture<T, P>  where T: 'static, P: ClientProto<T> {
             Message::WithoutBody(msg) => Ok(msg.into()),
             Message::WithBody(..) => panic!("bodies not supported"),
         }
+    }
+}
+
+impl<T, P> fmt::Debug for ClientFuture<T, P>
+    where T: 'static + fmt::Debug,
+          P: ClientProto<T> + fmt::Debug
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ClientService {{ ... }}")
     }
 }

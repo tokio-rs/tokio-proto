@@ -6,6 +6,8 @@ use futures::sink::Sink;
 use futures::stream::Stream;
 use futures::task::{self, Task};
 
+use std::fmt;
+
 #[must_use = "sinks do nothing unless polled"]
 pub struct BufferOne<S: Sink> {
     sink: S,
@@ -92,5 +94,18 @@ impl<S: Sink> Sink for BufferOne<S> {
         } else {
             Ok(Async::NotReady)
         }
+    }
+}
+
+impl<S> fmt::Debug for BufferOne<S>
+    where S: Sink + fmt::Debug,
+          S::SinkItem: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("BufferOne")
+            .field("sink", &self.sink)
+            .field("buf", &self.buf)
+            .field("task", &self.task)
+            .finish()
     }
 }
