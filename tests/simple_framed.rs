@@ -2,10 +2,15 @@ extern crate futures;
 extern crate tokio_core;
 extern crate tokio_proto;
 extern crate tokio_service;
+extern crate tokio_io;
+extern crate bytes;
 
 use std::io;
-use futures::{BoxFuture};
-use tokio_core::io::{Io, Codec, Framed, EasyBuf};
+
+use bytes::BytesMut;
+use futures::BoxFuture;
+use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::codec::{Encoder, Decoder, Framed};
 use tokio_proto::TcpServer;
 use tokio_proto::streaming::{Message, Body};
 use tokio_proto::streaming::pipeline;
@@ -15,15 +20,20 @@ use tokio_service::Service;
 #[derive(Default)]
 struct PipelineCodec;
 
-impl Codec for PipelineCodec {
-    type In = pipeline::Frame<u32, (), io::Error>;
-    type Out = pipeline::Frame<u32, u32, io::Error>;
+impl Decoder for PipelineCodec {
+    type Item = pipeline::Frame<u32, (), io::Error>;
+    type Error = io::Error;
 
-    fn decode(&mut self, _: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
+    fn decode(&mut self, _: &mut BytesMut) -> io::Result<Option<Self::Item>> {
         Ok(None)
     }
+}
 
-    fn encode(&mut self, _: Self::Out, _: &mut Vec<u8>) -> io::Result<()> {
+impl Encoder for PipelineCodec {
+    type Item = pipeline::Frame<u32, u32, io::Error>;
+    type Error = io::Error;
+
+    fn encode(&mut self, _: Self::Item, _: &mut BytesMut) -> io::Result<()> {
         Ok(())
     }
 }
@@ -31,22 +41,27 @@ impl Codec for PipelineCodec {
 #[derive(Default)]
 struct MultiplexCodec;
 
-impl Codec for MultiplexCodec {
-    type In = multiplex::Frame<u32, (), io::Error>;
-    type Out = multiplex::Frame<u32, u32, io::Error>;
+impl Decoder for MultiplexCodec {
+    type Item = multiplex::Frame<u32, (), io::Error>;
+    type Error = io::Error;
 
-    fn decode(&mut self, _: &mut EasyBuf) -> Result<Option<Self::In>, io::Error> {
+    fn decode(&mut self, _: &mut BytesMut) -> io::Result<Option<Self::Item>> {
         Ok(None)
     }
+}
 
-    fn encode(&mut self, _: Self::Out, _: &mut Vec<u8>) -> io::Result<()> {
+impl Encoder for MultiplexCodec {
+    type Item = multiplex::Frame<u32, u32, io::Error>;
+    type Error = io::Error;
+
+    fn encode(&mut self, _: Self::Item, _: &mut BytesMut) -> io::Result<()> {
         Ok(())
     }
 }
 
 struct PipelineProto;
 
-impl<T: Io + 'static> pipeline::ServerProto<T> for PipelineProto {
+impl<T: AsyncRead + AsyncWrite + 'static> pipeline::ServerProto<T> for PipelineProto {
     type Request = u32;
     type RequestBody = ();
     type Response = u32;
@@ -62,7 +77,7 @@ impl<T: Io + 'static> pipeline::ServerProto<T> for PipelineProto {
 
 struct MultiplexProto;
 
-impl<T: Io + 'static> multiplex::ServerProto<T> for MultiplexProto {
+impl<T: AsyncRead + AsyncWrite + 'static> multiplex::ServerProto<T> for MultiplexProto {
     type Request = u32;
     type RequestBody = ();
     type Response = u32;

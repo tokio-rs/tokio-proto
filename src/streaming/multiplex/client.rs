@@ -4,8 +4,8 @@ use super::advanced::{Multiplex, MultiplexMessage};
 use BindClient;
 use streaming::{Body, Message};
 use util::client_proxy::{self, ClientProxy, Receiver};
-use futures::{Future, IntoFuture, Complete, Poll, Async};
-use futures::stream::Stream;
+use futures::{Future, IntoFuture, Poll, Async, Stream};
+use futures::sync::oneshot;
 use tokio_core::reactor::Handle;
 use std::io;
 use std::collections::HashMap;
@@ -92,7 +92,7 @@ struct Dispatch<P, T, B> where
 {
     transport: P::Transport,
     requests: Receiver<P::ServiceRequest, P::ServiceResponse, P::Error>,
-    in_flight: HashMap<RequestId, Complete<Result<P::ServiceResponse, P::Error>>>,
+    in_flight: HashMap<RequestId, oneshot::Sender<Result<P::ServiceResponse, P::Error>>>,
     next_request_id: u64,
 }
 
@@ -120,7 +120,7 @@ impl<P, T, B> super::advanced::Dispatch for Dispatch<P, T, B> where
         assert!(!solo);
 
         if let Some(complete) = self.in_flight.remove(&id) {
-            complete.complete(message);
+            drop(complete.send(message));
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "request / response mismatch"));
         }
@@ -188,7 +188,7 @@ impl<P, T, B> Drop for Dispatch<P, T, B> where
 
         // Complete any pending requests with an error
         for (_, complete) in self.in_flight.drain() {
-            complete.complete(Err(broken_pipe().into()));
+            drop(complete.send(Err(broken_pipe().into())));
         }
     }
 }

@@ -3,8 +3,8 @@ use streaming::{Body, Message};
 use super::{StreamingPipeline, Frame, Transport};
 use super::advanced::{Pipeline, PipelineMessage};
 use util::client_proxy::{self, ClientProxy, Receiver};
-use futures::stream::Stream;
-use futures::{Future, IntoFuture, Complete, Poll, Async};
+use futures::{Future, IntoFuture, Poll, Async, Stream};
+use futures::sync::oneshot;
 use tokio_core::reactor::Handle;
 use std::collections::VecDeque;
 use std::io;
@@ -89,7 +89,7 @@ struct Dispatch<P, T, B> where
 {
     transport: P::Transport,
     requests: Receiver<P::ServiceRequest, P::ServiceResponse, P::Error>,
-    in_flight: VecDeque<Complete<Result<P::ServiceResponse, P::Error>>>,
+    in_flight: VecDeque<oneshot::Sender<Result<P::ServiceResponse, P::Error>>>,
 }
 
 impl<P, T, B> super::advanced::Dispatch for Dispatch<P, T, B> where
@@ -114,7 +114,7 @@ impl<P, T, B> super::advanced::Dispatch for Dispatch<P, T, B> where
                 -> io::Result<()>
     {
         if let Some(complete) = self.in_flight.pop_front() {
-            complete.complete(response);
+            drop(complete.send(response));
         } else {
             return Err(io::Error::new(io::ErrorKind::Other, "request / response mismatch"));
         }
@@ -169,7 +169,7 @@ impl<P, T, B> Drop for Dispatch<P, T, B> where
     fn drop(&mut self) {
         // Complete any pending requests with an error
         while let Some(complete) = self.in_flight.pop_front() {
-            complete.complete(Err(broken_pipe().into()));
+            drop(complete.send(Err(broken_pipe().into())));
         }
     }
 }

@@ -22,17 +22,19 @@ exclude       = [
 ]
 
 [dependencies]
+futures = "0.1.11"
 log = "0.3.6"
-slab = "0.3"
-take = "0.1.0"
-rand = "0.3.14"
-smallvec = "0.2.0"
-futures = "0.1.6"
-tokio-core = "0.1.1"
 net2 = "0.2"
+rand = "0.3.14"
+slab = "0.3"
+smallvec = "0.2.0"
+take = "0.1.0"
+tokio-core = "0.1.5"
 tokio-service = "0.1"
+tokio-io = "0.1"
 
 [dev-dependencies]
 env_logger = "0.3.0"
 lazycell = "0.4.0"
 mio = "0.6"
+bytes = "0.4"

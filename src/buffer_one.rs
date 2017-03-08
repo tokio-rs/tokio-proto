@@ -95,6 +95,11 @@ impl<S: Sink> Sink for BufferOne<S> {
             Ok(Async::NotReady)
         }
     }
+
+    fn close(&mut self) -> Poll<(), Self::SinkError> {
+        try_ready!(self.poll_complete());
+        self.sink.close()
+    }
 }
 
 impl<S> fmt::Debug for BufferOne<S>

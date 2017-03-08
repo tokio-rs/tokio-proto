@@ -4,7 +4,8 @@
 
 use std::io;
 use futures::{Stream, Sink};
-use tokio_core::io::{Io, Framed, Codec};
+use tokio_core::io as old_io;
+use tokio_io as new_io;
 
 mod frame;
 pub use self::frame::Frame;
@@ -44,4 +45,13 @@ pub trait Transport: 'static +
     }
 }
 
-impl<T:Io + 'static, C: Codec + 'static> Transport for Framed<T,C> {}
+impl<T, C> Transport for old_io::Framed<T,C>
+    where T: old_io::Io + 'static,
+          C: old_io::Codec + 'static,
+{}
+
+impl<T, C> Transport for new_io::codec::Framed<T,C>
+    where T: new_io::AsyncRead + new_io::AsyncWrite + 'static,
+          C: new_io::codec::Encoder<Error=io::Error> +
+                new_io::codec::Decoder<Error=io::Error> + 'static,
+{}

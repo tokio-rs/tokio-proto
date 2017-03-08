@@ -435,6 +435,10 @@ impl<T: Dispatch> Sink for DispatchSink<T> {
     fn poll_complete(&mut self) -> Poll<(), io::Error> {
         self.inner.transport().poll_complete()
     }
+
+    fn close(&mut self) -> Poll<(), io::Error> {
+        self.inner.transport().close()
+    }
 }
 
 impl<T: fmt::Debug> fmt::Debug for DispatchSink<T> {

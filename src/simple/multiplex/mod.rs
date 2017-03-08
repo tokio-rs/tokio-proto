@@ -90,6 +90,10 @@ mod lift {
         fn poll_complete(&mut self) -> Poll<(), io::Error> {
             self.0.poll_complete()
         }
+
+        fn close(&mut self) -> Poll<(), io::Error> {
+            self.0.close()
+        }
     }
 
     impl<T, InnerItem, InnerSink, E> Transport<()> for LiftTransport<T, E> where
