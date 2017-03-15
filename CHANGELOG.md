@@ -1,4 +1,4 @@
-# 0.1.1 (unreleased)
+# 0.1.1 (March 15, 2017)
 
 * Switch to tokio-io and latest futures
 * Correctly handle some cases that would panic
