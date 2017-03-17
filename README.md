@@ -6,11 +6,12 @@ response API. It is a part of the [Tokio] platform.
 
 [![Build Status](https://travis-ci.org/tokio-rs/tokio-proto.svg?branch=master)](https://travis-ci.org/tokio-rs/tokio-proto)
 
-[transport](https://tokio.rs/docs/going-deeper/transports/)
-[Tokio](https://tokio.rs)
 [Documentation](https://docs.rs/tokio-proto) |
 [Gitter](https://gitter.im/tokio-rs/tokio) |
 [Tutorial](https://tokio.rs)
+
+[transport]: https://tokio.rs/docs/going-deeper/transports/
+[Tokio]: https://tokio.rs
 
 ## Usage
 
