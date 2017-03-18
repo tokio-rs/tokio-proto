@@ -70,7 +70,9 @@ impl Encoder for IntCodec {
     type Error = io::Error;
 
     fn encode(&mut self, item: u64, into: &mut BytesMut) -> io::Result<()> {
-        into.put(item.to_string().as_bytes());
+        let string = item.to_string();
+        into.reserve(string.as_bytes().len());
+        into.put(string.as_bytes());
         Ok(())
     }
 }
