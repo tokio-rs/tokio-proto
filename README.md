@@ -10,7 +10,7 @@ response API. It is a part of the [Tokio] platform.
 [Gitter](https://gitter.im/tokio-rs/tokio) |
 [Tutorial](https://tokio.rs)
 
-[transport]: https://tokio.rs/docs/going-deeper/transports/
+[transport]: https://tokio.rs/docs/going-deeper-tokio/transports/
 [Tokio]: https://tokio.rs
 
 ## Usage
