@@ -247,7 +247,7 @@ pub trait BindServer<Kind, T: 'static>: 'static {
 /// Binds an I/O object as a client of a service.
 ///
 /// This trait is not intended to be implemented directly; instead, implement
-/// one of the server protocol traits:
+/// one of the client protocol traits:
 ///
 /// - `pipeline::ClientProto`
 /// - `multiplex::ClientProto`
