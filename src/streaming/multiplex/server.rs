@@ -4,9 +4,9 @@ use super::advanced::{Multiplex, MultiplexMessage};
 use BindServer;
 use streaming::{Message, Body};
 use tokio_service::Service;
-use tokio_core::reactor::Handle;
 use futures::{Future, Poll, Async};
 use futures::{IntoFuture, Stream};
+use futures::future::Executor;
 use std::io;
 
 /// A streaming, multiplexed server protocol.
@@ -76,10 +76,11 @@ impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
     type ServiceResponse = Message<P::Response, B>;
     type ServiceError = P::Error;
 
-    fn bind_server<S>(&self, handle: &Handle, io: T, service: S)
+    fn bind_server<S, E>(&self, executor: &E, io: T, service: S)
         where S: Service<Request = Self::ServiceRequest,
                          Response = Self::ServiceResponse,
-                         Error = Self::ServiceError> + 'static
+                         Error = Self::ServiceError> + 'static,
+              E: Executor<Box<Future<Item = (), Error = ()>>>
     {
         let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<S, T, P> = Dispatch {
@@ -91,7 +92,8 @@ impl<P, T, B> BindServer<super::StreamingMultiplex<B>, T> for P where
         }).map_err(|_| ());
 
         // Spawn the multiplex dispatcher
-        handle.spawn(task)
+        executor.execute(Box::new(task))
+            .expect("failed to spawn server onto executor")
     }
 }
 
