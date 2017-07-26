@@ -202,7 +202,7 @@ pub use tcp_client::{TcpClient, Connect};
 mod tcp_server;
 pub use tcp_server::TcpServer;
 
-use tokio_core::reactor::Handle;
+use futures::future::{Executor, Future};
 use tokio_service::Service;
 
 // TODO: move this into futures-rs
@@ -238,10 +238,11 @@ pub trait BindServer<Kind, T: 'static>: 'static {
     ///
     /// This method should spawn a new task on the given event loop handle which
     /// provides the given service on the given I/O object.
-    fn bind_server<S>(&self, handle: &Handle, io: T, service: S)
+    fn bind_server<S, E>(&self, executor: &E, io: T, service: S)
         where S: Service<Request = Self::ServiceRequest,
                          Response = Self::ServiceResponse,
-                         Error = Self::ServiceError> + 'static;
+                         Error = Self::ServiceError> + 'static,
+              E: Executor<Box<Future<Item = (), Error = ()>>>;
 }
 
 /// Binds an I/O object as a client of a service.
@@ -276,5 +277,6 @@ pub trait BindClient<Kind, T: 'static>: 'static {
                              Error = Self::ServiceError>;
 
     /// Bind an I/O object as a service.
-    fn bind_client(&self, handle: &Handle, io: T) -> Self::BindClient;
+    fn bind_client<E>(&self, executor: &E, io: T) -> Self::BindClient
+        where E: Executor<Box<Future<Item = (), Error = ()>>>;
 }

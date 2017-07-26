@@ -1,12 +1,12 @@
 use BindServer;
 use futures::stream::Stream;
 use futures::{Future, IntoFuture, Poll, Async};
+use futures::future::Executor;
 use std::collections::VecDeque;
 use std::io;
 use streaming::{Message, Body};
 use super::advanced::{Pipeline, PipelineMessage};
 use super::{Frame, Transport};
-use tokio_core::reactor::Handle;
 use tokio_service::Service;
 
 // TODO:
@@ -62,10 +62,11 @@ impl<P, T, B> BindServer<super::StreamingPipeline<B>, T> for P where
     type ServiceResponse = Message<P::Response, B>;
     type ServiceError = P::Error;
 
-    fn bind_server<S>(&self, handle: &Handle, io: T, service: S)
+    fn bind_server<S, E>(&self, executor: &E, io: T, service: S)
         where S: Service<Request = Self::ServiceRequest,
                          Response = Self::ServiceResponse,
-                         Error = Self::ServiceError> + 'static
+                         Error = Self::ServiceError> + 'static,
+              E: Executor<Box<Future<Item = (), Error = ()>>>
     {
         let task = self.bind_transport(io).into_future().and_then(|transport| {
             let dispatch: Dispatch<S, T, P> = Dispatch {
@@ -77,7 +78,8 @@ impl<P, T, B> BindServer<super::StreamingPipeline<B>, T> for P where
         });
 
         // Spawn the pipeline dispatcher
-        handle.spawn(task.map_err(|_| ()))
+        executor.execute(Box::new(task.map_err(|_| ())))
+            .expect("failed to spawn server onto executor")
     }
 }
 

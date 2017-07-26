@@ -7,9 +7,9 @@ use std::{fmt, io};
 
 use streaming::{self, Message};
 use streaming::multiplex::StreamingMultiplex;
-use tokio_core::reactor::Handle;
 use tokio_service::Service;
 use futures::{stream, Stream, Sink, Future, IntoFuture, Poll};
+use futures::future::Executor;
 
 type MyStream<E> = stream::Empty<(), E>;
 
@@ -58,10 +58,12 @@ impl<T: 'static, P: ClientProto<T>> BindClient<Multiplex, T> for P {
 
     type BindClient = ClientService<T, P>;
 
-    fn bind_client(&self, handle: &Handle, io: T) -> Self::BindClient {
+    fn bind_client<E>(&self, executor: &E, io: T) -> Self::BindClient
+        where E: Executor<Box<Future<Item = (), Error = ()>>>,
+    {
         ClientService {
             inner: BindClient::<StreamingMultiplex<MyStream<io::Error>>, T>::bind_client(
-                LiftProto::from_ref(self), handle, io
+                LiftProto::from_ref(self), executor, io
             )
         }
     }
