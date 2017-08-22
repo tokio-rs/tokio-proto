@@ -123,6 +123,9 @@ impl<T, P> fmt::Debug for ClientService<T, P>
     }
 }
 
+/// Future returned by a call to [`ClientService`].
+///
+/// [`ClientService`]: struct.ClientService.html
 pub struct ClientFuture<T, P> where T: 'static, P: ClientProto<T> {
     inner: <<LiftProto<P> as BindClient<StreamingMultiplex<MyStream<io::Error>>, T>>::BindClient
             as Service>::Future
