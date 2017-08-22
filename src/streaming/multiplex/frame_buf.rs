@@ -186,14 +186,7 @@ impl<T> Inner<T> {
                 return Some(slot);
             }
 
-            let grow = {
-                if self.blocks.is_empty() {
-                    true
-                } else {
-                    let block = self.blocks.last().unwrap();
-                    block.len() == block.capacity()
-                }
-            };
+            let grow = self.blocks.last().map_or(true, |b| b.len() == b.capacity());
 
             if grow && !self.grow() {
                 return None;
