@@ -176,7 +176,6 @@
 #![allow(deprecated)] // TODO remove this
 
 extern crate net2;
-extern crate rand;
 extern crate slab;
 extern crate smallvec;
 extern crate take;

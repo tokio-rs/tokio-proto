@@ -25,7 +25,6 @@ exclude       = [
 futures = "0.1.14"
 log = "0.3.6"
 net2 = "0.2"
-rand = "0.3.14"
 slab = "0.3"
 smallvec = "0.4.0"
 take = "0.1.0"
@@ -34,7 +33,8 @@ tokio-service = "0.1"
 tokio-io = "0.1"
 
 [dev-dependencies]
+bytes = "0.4"
 env_logger = "0.3.0"
 lazycell = "0.4.0"
 mio = "0.6"
-bytes = "0.4"
+rand = "0.3.14"
