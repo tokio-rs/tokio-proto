@@ -155,10 +155,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                     // will get dropped. This terminates the stream.
                     self.out_body = Some(BufferOne::new(tx));
 
-                    if let Err(e) = self.dispatch.get_mut().inner.dispatch(Ok(message)) {
-                        // TODO: Should dispatch be infallible
-                        panic!("unimplemented error handling: {:?}", e);
-                    }
+                    self.dispatch.get_mut().inner.dispatch(Ok(message))?;
                 } else {
                     trace!("read out message");
 
@@ -168,10 +165,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                     // the previous body stream is dropped.
                     self.out_body = None;
 
-                    if let Err(e) = self.dispatch.get_mut().inner.dispatch(Ok(message)) {
-                        // TODO: Should dispatch be infalliable
-                        panic!("unimplemented error handling: {:?}", e);
-                    }
+                    self.dispatch.get_mut().inner.dispatch(Ok(message))?;
                 }
             }
             Some(Frame::Body { chunk }) => {
