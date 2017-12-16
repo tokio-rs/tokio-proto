@@ -6,7 +6,6 @@ extern crate tokio_proto;
 extern crate tokio_service;
 extern crate rand;
 
-#[macro_use]
 extern crate log;
 extern crate env_logger;
 
