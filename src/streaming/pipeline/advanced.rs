@@ -20,8 +20,11 @@ use buffer_one::BufferOne;
 /// Provides protocol pipelining functionality in a generic way over clients
 /// and servers. Used internally by `pipeline::Client` and `pipeline::Server`.
 pub struct Pipeline<T> where T: Dispatch {
-    // True as long as the connection has more request frames to read.
-    run: bool,
+    // True as long as the transport `T` hasn't completed.
+    transport_open: bool,
+
+    // True as long as the channel of incoming requests is open.
+    request_sender_open: bool,
 
     // Glues the service with the pipeline task
     dispatch: BufferOne<DispatchSink<T>>,
@@ -97,7 +100,8 @@ impl<T> Pipeline<T> where T: Dispatch {
         let dispatch = BufferOne::new(dispatch);
 
         Pipeline {
-            run: true,
+            transport_open: true,
+            request_sender_open: true,
             dispatch: dispatch,
             out_body: None,
             in_body: None,
@@ -107,11 +111,11 @@ impl<T> Pipeline<T> where T: Dispatch {
 
     /// Returns true if the pipeline server dispatch has nothing left to do
     fn is_done(&self) -> bool {
-        !self.run && self.is_flushed && !self.has_in_flight()
+        (!self.transport_open || !self.request_sender_open) && self.is_flushed && !self.has_in_flight()
     }
 
     fn read_out_frames(&mut self) -> io::Result<()> {
-        while self.run {
+        while self.transport_open {
             // Return true if the pipeliner can process new outbound frames
             if !self.check_out_body_stream() {
                 break;
@@ -187,7 +191,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                 // At this point, we just return. This works
                 // because tick() will be called again and go
                 // through the read-cycle again.
-                self.run = false;
+                self.transport_open = false;
             }
             Some(Frame::Error { .. }) => {
                 // At this point, the transport is toast, there
@@ -252,6 +256,7 @@ impl<T> Pipeline<T> where T: Dispatch {
                 Async::Ready(None) => {
                     trace!("   --> got None");
                     // The service is done with the connection.
+                    self.request_sender_open = false;
                     break;
                 }
                 // Nothing to dispatch
@@ -407,7 +412,8 @@ impl<T> fmt::Debug for Pipeline<T>
 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("Pipeline")
-            .field("run", &self.run)
+            .field("transport_open", &self.transport_open)
+            .field("request_sender_open", &self.request_sender_open)
             .field("dispatch", &self.dispatch)
             .field("out_body", &"Sender { ... }")
             .field("in_body", &self.in_body)
