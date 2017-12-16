@@ -11,8 +11,7 @@ pub enum Frame<T, B, E> {
     /// Body frame. None indicates that the body is done streaming.
     Body {
         /// Body chunk. Setting to `None` indicates that the body is done
-        /// streaming and there will be no further body frames sent with the
-        /// given request ID.
+        /// streaming and there will be no further body frames sent
         chunk: Option<B>,
     },
     /// Error
