@@ -9,7 +9,7 @@ extern crate bytes;
 use std::io;
 
 use futures::future;
-use futures::{Future, BoxFuture};
+use futures::future::FutureResult;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::codec::{Framed, Encoder, Decoder};
 use bytes::BytesMut;
@@ -73,10 +73,10 @@ impl Service for Echo {
     type Request = String;
     type Response = String;
     type Error = io::Error;
-    type Future = BoxFuture<Self::Response, Self::Error>;
+    type Future = FutureResult<Self::Response, Self::Error>;
 
     fn call(&self, req: Self::Request) -> Self::Future {
-        future::ok(req).boxed()
+        future::ok(req)
     }
 }
 
