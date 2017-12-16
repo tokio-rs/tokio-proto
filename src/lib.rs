@@ -176,9 +176,7 @@
 #![allow(deprecated)] // TODO remove this
 
 extern crate net2;
-extern crate slab;
 extern crate smallvec;
-extern crate take;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_service;
