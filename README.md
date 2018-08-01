@@ -1,3 +1,7 @@
+# This crate is deprecated!
+
+This crate is deprecated without an immediate replacement.  Discussion about a successor can be found in [tokio-rs/tokio#118](https://github.com/tokio-rs/tokio/issues/118).
+
 # tokio-proto
 
 `tokio-proto` makes it easy to implement clients and servers for **request /
